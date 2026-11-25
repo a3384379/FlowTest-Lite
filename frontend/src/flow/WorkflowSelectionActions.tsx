@@ -53,18 +53,16 @@ export function WorkflowNodeActions({
         >
           {inspectionLabel}
         </Button>
-        <Button size="small" icon={<CopyOutlined />} disabled={!canCopy} onClick={onCopy}>
-          复制
-        </Button>
-        <Button
-          size="small"
-          danger
-          icon={<DeleteOutlined />}
-          disabled={!actions.editable}
-          onClick={actions.onDelete}
-        >
-          删除
-        </Button>
+        {inspectionMode === 'configuration' && (
+          <>
+            <Button size="small" icon={<CopyOutlined />} disabled={!canCopy} onClick={onCopy}>
+              复制
+            </Button>
+            <Button size="small" danger icon={<DeleteOutlined />} disabled={!actions.editable} onClick={actions.onDelete}>
+              删除
+            </Button>
+          </>
+        )}
       </Space.Compact>
     </NodeToolbar>
   )

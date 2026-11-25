@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 from app.domain.api_assets import AuthKind, BodyKind, ExtractionKind, HttpMethod
 from app.domain.assertions import AssertionKind, ComparisonOperator
@@ -52,6 +52,16 @@ class ApiAsset(Model):
     description: str = Field(default="", max_length=2000)
     base_url: str = Field(default="", max_length=4096)
     request: RequestDefinition = Field(default_factory=RequestDefinition)
+
+
+class ApiGroupName(Model):
+    name: Annotated[str, StringConstraints(min_length=1, max_length=100, strip_whitespace=True)]
+    previous: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class MoveApis(Model):
+    ids: list[UUID] = Field(min_length=1, max_length=1000)
+    group: str = Field(default="", max_length=100)
 
 
 class Environment(Model):

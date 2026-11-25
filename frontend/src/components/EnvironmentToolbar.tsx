@@ -1,3 +1,4 @@
+import { SettingOutlined } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import { Alert, App, Button, Drawer, Form, Input, Popconfirm, Select, Space, Spin } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -21,7 +22,7 @@ export default function EnvironmentToolbar({ environment, selectEnvironment }: E
     if (available && environment && !validSelection) selectEnvironment(undefined)
   }, [available, environment, validSelection, selectEnvironment])
   return (
-    <Space wrap>
+    <Space wrap className="app-environment">
       <Select
         aria-label="执行环境"
         style={{ minWidth: 150 }}
@@ -32,7 +33,7 @@ export default function EnvironmentToolbar({ environment, selectEnvironment }: E
         onChange={selectEnvironment}
         options={available?.map((item) => ({ value: item.id, label: item.name }))}
       />
-      <Button onClick={() => setOpen(true)}>环境与公共参数</Button>
+      <Button icon={<SettingOutlined />} aria-label="环境与公共参数" onClick={() => setOpen(true)}><span className="environment-button-label">环境与公共参数</span></Button>
       <Drawer title="环境与公共参数" size={550} open={open} onClose={() => setOpen(false)} destroyOnHidden>
         {catalog.error ? <Alert type="error" title={apiErrorMessage(catalog.error)} /> : (
           <EnvironmentEditor environments={available ?? []} onSelect={selectEnvironment} />

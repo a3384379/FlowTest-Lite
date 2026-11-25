@@ -49,13 +49,11 @@ function readPreferences(key: string): Preferences {
 export default function ApiWorkspace({
   preferenceKey,
   directory,
-  request,
-  response,
+  workbench,
 }: {
   preferenceKey: string
   directory: ReactNode
-  request: ReactNode
-  response: ReactNode
+  workbench: (renderPanels: (request: ReactNode, response: ReactNode) => ReactNode) => ReactNode
 }) {
   const [preferences, setPreferences] = useState(() => readPreferences(preferenceKey))
   const [storageError, setStorageError] = useState(false)
@@ -87,16 +85,45 @@ export default function ApiWorkspace({
       setStorageError(true)
     }
   }
+  function renderPanels(request: ReactNode, response: ReactNode) {
+    return (
+        <div
+          className={`api-workspace-main api-layout-main layout-${preferences.layout}${preferences.responseCollapsed ? ' response-collapsed' : ''}`}
+          style={
+            {
+              '--api-request-share': `${preferences.requestShare}fr`,
+              '--api-response-share': `${100 - preferences.requestShare}fr`,
+            } as CSSProperties
+          }
+        >
+          <div className="api-layout-request">{request}</div>
+          <ResizeHandle
+            label="调整请求响应比例"
+            value={preferences.requestShare}
+            min={30}
+            max={70}
+            axis={preferences.layout === 'side' ? 'x' : 'y'}
+            unit="percent"
+            disabled={preferences.responseCollapsed}
+            onChange={(value) => update({ requestShare: value }, false)}
+            onCommit={(value) => update({ requestShare: value })}
+          />
+          <div className="api-layout-response">{response}</div>
+        </div>
+    )
+  }
   return (
     <>
-      <Space wrap className="api-layout-toolbar" aria-label="接口工作区布局">
+      <Space wrap size={6} className="api-layout-toolbar" aria-label="接口工作区布局">
         <Button
+          size="small"
           aria-expanded={!preferences.directoryCollapsed}
           onClick={() => update({ directoryCollapsed: !preferences.directoryCollapsed })}
         >
           {preferences.directoryCollapsed ? '展开目录' : '收起目录'}
         </Button>
         <Segmented
+          size="small"
           aria-label="请求响应布局"
           value={preferences.layout}
           options={[
@@ -106,6 +133,7 @@ export default function ApiWorkspace({
           onChange={(layout) => update({ layout: layout as Preferences['layout'] })}
         />
         <Button
+          size="small"
           aria-expanded={!preferences.responseCollapsed}
           onClick={() => update({ responseCollapsed: !preferences.responseCollapsed })}
         >
@@ -148,28 +176,8 @@ export default function ApiWorkspace({
           onChange={(value) => update({ directoryWidth: value }, false)}
           onCommit={(value) => update({ directoryWidth: value })}
         />
-        <div
-          className={`api-workspace-main api-layout-main layout-${preferences.layout}${preferences.responseCollapsed ? ' response-collapsed' : ''}`}
-          style={
-            {
-              '--api-request-share': `${preferences.requestShare}fr`,
-              '--api-response-share': `${100 - preferences.requestShare}fr`,
-            } as CSSProperties
-          }
-        >
-          <div className="api-layout-request">{request}</div>
-          <ResizeHandle
-            label="调整请求响应比例"
-            value={preferences.requestShare}
-            min={30}
-            max={70}
-            axis={preferences.layout === 'side' ? 'x' : 'y'}
-            unit="percent"
-            disabled={preferences.responseCollapsed}
-            onChange={(value) => update({ requestShare: value }, false)}
-            onCommit={(value) => update({ requestShare: value })}
-          />
-          <div className="api-layout-response">{response}</div>
+        <div className="api-workbench-pane">
+          {workbench(renderPanels)}
         </div>
       </div>
     </>

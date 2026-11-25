@@ -22,7 +22,10 @@ from app.http_runtime import (
     response_data, send_request,
 )
 from app.import_assets import parse_import
-from app.models import ApiAsset, CommonSettings, Environment, ImportOptions, RunOptions, SendOptions, WorkflowAsset
+from app.models import (
+    ApiAsset, ApiGroupName, CommonSettings, Environment, ImportOptions, MoveApis,
+    RunOptions, SendOptions, WorkflowAsset,
+)
 from app.storage import EditConflict, MissingAsset, Store
 from app.workflow_runtime import WorkflowPlan, validate_definition
 
@@ -145,6 +148,26 @@ def update_asset(
 @app.delete("/api/assets/{kind}/{key}", status_code=204)
 def delete_asset(kind: AssetKind, key: UUID, request: Request):
     store_of(request).delete(kind, str(key))
+
+
+@app.get("/api/groups")
+def list_api_groups(request: Request) -> list[str]:
+    return store_of(request).groups()
+
+
+@app.put("/api/groups", status_code=204)
+def save_api_group(value: ApiGroupName, request: Request):
+    store_of(request).put_group(value.name, value.previous)
+
+
+@app.delete("/api/groups", status_code=204)
+def delete_api_group(request: Request, name: str = Query(min_length=1, max_length=100)):
+    store_of(request).delete_group(name)
+
+
+@app.post("/api/groups/move", status_code=204)
+def move_apis(value: MoveApis, request: Request):
+    store_of(request).move_apis([str(key) for key in value.ids], value.group.strip())
 
 
 def common_settings(store: Store) -> CommonSettings:

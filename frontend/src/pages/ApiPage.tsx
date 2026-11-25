@@ -1,16 +1,17 @@
-import { useState } from 'react'
-import { Alert, App, Button, Card, Checkbox, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Tag, Upload } from 'antd'
+import { DownloadOutlined, EditOutlined, ImportOutlined, MoreOutlined, PaperClipOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons'
+import { useState, useSyncExternalStore } from 'react'
+import { Alert, App, Button, Checkbox, Drawer, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Upload } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import APIWorkbench from '../features/api-console/APIWorkbench'
 import ApiWorkspace from '../features/api-console/ApiWorkspace'
-import { previewApi } from '../features/api-console/api-service'
+import ApiDirectory, { HttpMethodBadge } from '../features/api-console/ApiDirectory'
+import AssetTabs from '../components/AssetTabs'
 import { useDraftSession } from '../features/drafts/draft-session'
-import EnvironmentToolbar, { type EnvironmentSelection } from '../components/EnvironmentToolbar'
 import { InterfaceResult } from '../components/RunEvidence'
 import {
-  apiDetail, apiErrorMessage, client, createAsset, deleteAsset, httpMethods, listAssets, updateAsset,
-  type ApiAsset, type ApiInput, type Artifact, type ImportCandidate, type InterfaceRun, type RequestDefinition,
+  apiDetail, apiErrorMessage, client, createAsset, deleteAsset, listAssets, updateAsset,
+  type ApiAsset, type ApiInput, type Artifact, type ImportCandidate, type InterfaceRun, type RequestDefinition, type RequestSnapshot,
 } from '../lib/api'
 
 const defaultRequest: RequestDefinition = {
@@ -19,33 +20,48 @@ const defaultRequest: RequestDefinition = {
 }
 const emptyAsset: ApiInput = { name: '', group: '', description: '', base_url: '', request: defaultRequest }
 
-export default function ApiPage(selection: EnvironmentSelection) {
+export default function ApiPage({ environment }: { environment?: string }) {
   const [params, setParams] = useSearchParams()
-  const [search, setSearch] = useState('')
-  const [group, setGroup] = useState<string>()
-  const [method, setMethod] = useState<string>()
   const [editor, setEditor] = useState<ApiInput | null>(null)
   const [editingId, setEditingId] = useState<string>()
   const [importOpen, setImportOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
-  const [results, setResults] = useState<Record<string, InterfaceRun>>({})
-  const { message } = App.useApp()
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [executionOptions, setExecutionOptions] = useState<Record<string, RequestRunOptions>>({})
+  const { message, modal } = App.useApp()
   const cache = useQueryClient()
   const drafts = useDraftSession()
+  useSyncExternalStore(drafts.subscribe, drafts.snapshot)
   const catalog = useQuery({ queryKey: ['apis'], queryFn: () => listAssets('api') })
   const fileList = useQuery({
     queryKey: ['files'],
     queryFn: () => client.get<Artifact[]>('/files').then((res) => res.data),
   })
   const apis = catalog.data ?? []
-  const selectedId = params.get('id') ?? apis[0]?.id
-  const selected = apis.find((item) => item.id === selectedId)
-  const visible = apis.filter((api) =>
-    (group === undefined || group === api.group) && (!method || method === api.request.method) &&
-    `${api.name} ${api.description} ${api.request.path} ${api.group}`.toLowerCase().includes(search.trim().toLowerCase()),
-  )
-
-  const refresh = () => cache.invalidateQueries({ queryKey: ['apis'] })
+  const selected = apis.find((item) => item.id === params.get('id')) ?? apis[0]
+  const history = useQuery({
+    queryKey: ['api-runs', selected?.id],
+    queryFn: () => Promise.resolve([] as InterfaceRun[]),
+    enabled: false,
+  })
+  const options = selected && executionOptions[selected.id]
+  function runOptions(id: string) {
+    return { environment_id: environment ?? null, ...executionOptions[id] }
+  }
+  async function refresh() {
+    const current = await listAssets('api')
+    for (const item of current) {
+      const prior = apis.find((asset) => asset.id === item.id)
+      const draft = drafts.apis.get(item.id)
+      if (prior && draft?.baseVersion === prior.revision &&
+        JSON.stringify(prior.request) === JSON.stringify(item.request)) {
+        drafts.apis.set(item.id, { ...draft, baseVersion: item.revision })
+      }
+      cache.setQueryData(['api-detail', item.id], apiDetail(item))
+    }
+    cache.setQueryData(['apis'], current)
+    await cache.invalidateQueries({ queryKey: ['api-groups'] })
+  }
   function choose(id: string) { setParams({ id }) }
   function put(asset: ApiAsset) {
     cache.setQueryData<ApiAsset[]>(['apis'], (old) => [asset, ...(old ?? []).filter((item) => item.id !== asset.id)])
@@ -59,14 +75,12 @@ export default function ApiPage(selection: EnvironmentSelection) {
     onSuccess: put,
   })
   const send = useMutation({
-    mutationFn: (apiId: string) => client.post<InterfaceRun>(`/requests/${apiId}/send`, {
-      environment_id: selection.environment ?? null,
-    }).then((res) => res.data),
-    onSuccess: (data, id) => setResults((previous) => ({ ...previous, [id]: data })),
+    mutationFn: (apiId: string) => client.post<InterfaceRun>(`/requests/${apiId}/send`, runOptions(apiId)).then((res) => res.data),
+    onSuccess: (data, id) => cache.setQueryData<InterfaceRun[]>(['api-runs', id], (prior) => [data, ...(prior ?? []).slice(0, 11)]),
     onError: notify,
   })
   const preview = useMutation({
-    mutationFn: (id: string) => previewApi(id, selection.environment),
+    mutationFn: (id: string) => client.post<RequestSnapshot>(`/requests/${id}/preview`, runOptions(id)).then((res) => res.data),
     onError: notify,
   })
 
@@ -78,6 +92,13 @@ export default function ApiPage(selection: EnvironmentSelection) {
       const asset = await write.mutateAsync({
         asset: { ...metadata, request: { ...editor.request, ...(path ? { path } : {}) } }, previous,
       })
+      if (previous) {
+        const draft = drafts.apis.get(previous.id)
+        if (draft?.baseVersion === previous.revision) {
+          drafts.apis.set(previous.id, { ...draft, baseVersion: asset.revision })
+        }
+      }
+      void cache.invalidateQueries({ queryKey: ['api-groups'] })
       choose(asset.id)
       setEditor(null)
     } catch (error) { notify(error) }
@@ -101,42 +122,43 @@ export default function ApiPage(selection: EnvironmentSelection) {
     } catch (error) { notify(error) }
   }
 
+  function create(group = '') {
+    setEditingId(undefined)
+    setEditor({ ...emptyAsset, group })
+  }
+
+  async function exportCurl(api: ApiAsset) {
+    try {
+      const prepared = await preview.mutateAsync(api.id)
+      const content = curlCommand(prepared, api.request.body_kind, fileList.data ?? [])
+      const url = URL.createObjectURL(new Blob([content + '\n'], { type: 'text/plain;charset=utf-8' }))
+      const download = document.createElement('a')
+      download.href = url
+      download.download = `${api.name.replace(/[\\/:*?"<>|]/g, '_')}.curl.txt`
+      download.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch {
+      // The preview mutation handles error feedback.
+    }
+  }
   return (
     <>
       <div className="page-bar">
-        <h1>接口</h1>
-        <Space wrap>
-          <EnvironmentToolbar {...selection} />
-          <Button onClick={() => setFilesOpen(true)}>请求附件</Button>
-          <Button onClick={() => setImportOpen(true)}>导入接口</Button>
-          <Button type="primary" onClick={() => { setEditingId(undefined); setEditor(emptyAsset) }}>新建接口</Button>
+        <h1>接口管理</h1>
+        <Space wrap size={8}>
+          <Button icon={<PaperClipOutlined />} onClick={() => setFilesOpen(true)}>请求附件</Button>
+          <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入接口</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => create()}>新建接口</Button>
         </Space>
       </div>
+      <AssetTabs label="已打开接口" active={selected?.id} onSelect={choose} entries={apis.map((api) => ({
+        id: api.id, name: api.name, icon: <HttpMethodBadge method={api.request.method} />, dirty: drafts.apis.has(api.id),
+      }))} />
       {catalog.isError && <Alert type="error" title={apiErrorMessage(catalog.error)} />}
-      <ApiWorkspace
-        preferenceKey="flowtest-lite:api-layout"
-        directory={
-          <Card title="接口集合" loading={catalog.isPending}>
-            <Space orientation="vertical" className="full-width">
-              <Input.Search aria-label="搜索接口" allowClear placeholder="搜索名称、路径或分组" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <Select
-                aria-label="分组筛选"
-                allowClear placeholder="所有分组" value={group} onChange={setGroup}
-                className="full-width"
-                options={[...new Set(apis.map((api) => api.group))].sort().map((value) => ({ value, label: value || '未分组' }))}
-              />
-              <Select aria-label="方法筛选" allowClear placeholder="所有方法" value={method} onChange={setMethod} className="full-width" options={httpMethods.map((value) => ({ value }))} />
-              {visible.length === 0 && <Empty description="没有匹配的接口" />}
-              {visible.map((api) => (
-                <button key={api.id} type="button" className="catalog-item" aria-current={selected?.id === api.id} onClick={() => choose(api.id)}>
-                  <span><Tag color="blue">{api.request.method}</Tag>{api.name}</span>
-                  <small>{api.group ? `${api.group} · ` : ''}{api.request.path}</small>
-                </button>
-              ))}
-            </Space>
-          </Card>
-        }
-        request={
+      <ApiWorkspace preferenceKey="flowtest-lite:api-layout"
+        directory={<ApiDirectory apis={apis} selected={selected?.id} loading={catalog.isPending}
+          onChoose={choose} onCreate={create} onRefresh={refresh} />}
+        workbench={(renderPanels) => (
           <APIWorkbench
             key={selected?.id}
             detail={selected ? apiDetail(selected) : undefined}
@@ -144,7 +166,8 @@ export default function ApiPage(selection: EnvironmentSelection) {
             saving={write.isPending}
             previewing={preview.isPending}
             artifacts={fileList.data}
-            onRename={() => { if (selected) { setEditingId(selected.id); setEditor(selected) } }}
+            renderPanels={renderPanels}
+            response={<InterfaceResult key={selected?.id} history={history.data ?? []} configured={selected?.request.assertions ?? []} sending={send.isPending && send.variables === selected?.id} />}
             onPreview={() => selected ? preview.mutateAsync(selected.id) : Promise.resolve(null)}
             onSave={async ({ base_version, ...request }) => {
               if (!selected) throw new Error('请选择接口')
@@ -155,27 +178,38 @@ export default function ApiPage(selection: EnvironmentSelection) {
               return apiDetail(saved).version
             }}
             requestActions={selected && (
-              <Button type="primary" loading={send.isPending} onClick={() => send.mutate(selected.id)}>发送</Button>
+              <Button type="primary" icon={<PlayCircleOutlined />} loading={send.isPending && send.variables === selected.id}
+                onClick={() => send.mutate(selected.id)}>发送请求</Button>
             )}
-            targetActions={selected && (
-              <Space wrap>
-                <Button size="small" onClick={() => void duplicate(selected)}>复制接口</Button>
-                <Popconfirm title="删除这个接口？" description="引用它的流程会提示接口不存在。" onConfirm={() => remove(selected)}>
-                  <Button size="small" danger>删除接口</Button>
-                </Popconfirm>
-              </Space>
+            actions={selected && (
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'runtime', label: '本次请求参数' },
+                { key: 'edit', label: '编辑接口信息', icon: <EditOutlined /> },
+                { key: 'duplicate', label: '复制接口' },
+                { key: 'curl', label: '导出 cURL', icon: <DownloadOutlined /> },
+                { key: 'delete', label: '删除接口', danger: true },
+              ], onClick: ({ key }) => {
+                if (key === 'runtime') setOptionsOpen(true)
+                if (key === 'edit') { setEditingId(selected.id); setEditor(selected) }
+                if (key === 'duplicate') void duplicate(selected)
+                if (key === 'curl') void exportCurl(selected)
+                if (key === 'delete') modal.confirm({
+                  title: '删除这个接口？', content: '引用它的流程会提示接口不存在。',
+                  okText: '删除接口', okButtonProps: { danger: true }, onOk: () => remove(selected),
+                })
+              } }}>
+                <Button type="text" size="small" icon={<MoreOutlined />} aria-label="更多接口操作" />
+              </Dropdown>
             )}
           />
-        }
-        response={<Card title="响应"><InterfaceResult result={selected ? results[selected.id] : undefined} /></Card>}
+        )}
       />
+      {selected && optionsOpen && <RuntimeOptions value={options} onClose={() => setOptionsOpen(false)}
+        onApply={(value) => { setExecutionOptions((old) => ({ ...old, [selected.id]: value })); setOptionsOpen(false) }} />}
       {editor && <ApiEditDialog value={editor} editing={Boolean(editingId)} saving={write.isPending} close={() => setEditor(null)} save={saveMetadata} />}
       {importOpen && <ImportDialog close={() => setImportOpen(false)} saved={async (assets) => {
         await refresh()
         if (assets[0]) choose(assets[0].id)
-        setGroup(undefined)
-        setSearch('')
-        setMethod(undefined)
         setImportOpen(false)
       }} />}
       <Drawer title="请求附件" size={460} open={filesOpen} onClose={() => setFilesOpen(false)}>
@@ -286,4 +320,64 @@ function ImportDialog({ close, saved }: { close: () => void; saved: (assets: Api
       </Space>
     </Modal>
   )
+}
+
+type RequestRunOptions = { runtime_variables: Record<string, unknown>; timeout_seconds: number }
+
+function RuntimeOptions({ value, onApply, onClose }: {
+  value?: RequestRunOptions; onApply: (value: RequestRunOptions) => void; onClose: () => void
+}) {
+  const [form] = Form.useForm<{ variables: string; timeout: number }>()
+  const [error, setError] = useState('')
+  return (
+    <Modal open title="本次请求参数" onCancel={onClose} onOk={() => form.submit()} okText="应用">
+      {error && <Alert type="error" title={error} />}
+      <Form form={form} layout="vertical" initialValues={{
+        variables: JSON.stringify(value?.runtime_variables ?? {}, null, 2), timeout: value?.timeout_seconds ?? 30,
+      }} onFinish={({ variables, timeout }) => {
+        try {
+          const parsed: unknown = JSON.parse(variables)
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('变量应为 JSON 对象')
+          onApply({ runtime_variables: parsed as Record<string, unknown>, timeout_seconds: timeout })
+        } catch (cause) { setError(apiErrorMessage(cause)) }
+      }}>
+        <Form.Item name="variables" label="运行时变量（JSON）" extra="用于预览及发送，覆盖已保存的同名变量。">
+          <Input.TextArea rows={5} className="code-input" aria-label="运行时变量" />
+        </Form.Item>
+        <Form.Item name="timeout" label="超时（秒）" rules={[{ required: true }]}><InputNumber min={0.1} max={300} /></Form.Item>
+      </Form>
+    </Modal>
+  )
+}
+
+function curlCommand(request: RequestSnapshot, kind: RequestDefinition['body_kind'], artifacts: Artifact[]) {
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'"
+  const parts = ['curl', '-X', request.method, quote(request.url)]
+  const headers = { ...request.headers }
+  if (kind === 'multipart') {
+    for (const key of Object.keys(headers)) if (key.toLowerCase() === 'content-type') delete headers[key]
+  } else if (!Object.keys(headers).some((key) => key.toLowerCase() === 'content-type')) {
+    if (kind === 'json') headers['Content-Type'] = 'application/json'
+    if (kind === 'form') headers['Content-Type'] = 'application/x-www-form-urlencoded'
+  }
+  for (const [key, value] of Object.entries(headers)) parts.push('-H', quote(`${key}: ${value}`))
+  if (kind === 'multipart') {
+    const multipart = request.body as { fields: Record<string, string>; files: Array<{ field: string; artifact_id: string }> }
+    for (const [key, value] of Object.entries(multipart.fields ?? {})) parts.push('--form-string', quote(`${key}=${value}`))
+    for (const { field, artifact_id } of multipart.files ?? []) {
+      const name = artifacts.find((item) => item.id === artifact_id)?.filename ?? 'filename'
+      parts.push('--form', quote(`${field}=@./${name}`))
+    }
+  } else if (kind === 'json') {
+    parts.push('--data-raw', quote(JSON.stringify(request.body)))
+  } else if (kind === 'form' && request.body && typeof request.body === 'object') {
+    const form = new URLSearchParams()
+    for (const [key, value] of Object.entries(request.body)) {
+      for (const item of Array.isArray(value) ? value : [value]) form.append(key, String(item ?? ''))
+    }
+    parts.push('--data-raw', quote(form.toString()))
+  } else if (kind === 'raw') {
+    parts.push('--data-raw', quote(String(request.body ?? '')))
+  }
+  return parts.join(' ')
 }

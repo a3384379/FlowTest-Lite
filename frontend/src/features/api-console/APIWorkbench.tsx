@@ -1,9 +1,8 @@
 import { useDraftSession } from '../drafts/draft-session'
-import { EditOutlined, SaveOutlined } from '@ant-design/icons'
+import { EyeOutlined, SaveOutlined } from '@ant-design/icons'
 import {
   Button,
   Alert,
-  Card,
   Checkbox,
   Empty,
   Form,
@@ -12,7 +11,6 @@ import {
   Select,
   Space,
   Tabs,
-  Typography,
 } from 'antd'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
@@ -41,10 +39,11 @@ type APIWorkbenchProps = {
   previewing: boolean
   onSave: (input: ApiVersionInput) => Promise<ApiVersion>
   onPreview: () => Promise<unknown>
-  onRename: () => void
   artifacts?: Artifact[]
   requestActions?: ReactNode
-  targetActions?: ReactNode
+  actions?: ReactNode
+  response: ReactNode
+  renderPanels: (request: ReactNode, response: ReactNode) => ReactNode
 }
 
 export type WorkbenchFields = BodyEditorFields & {
@@ -61,15 +60,13 @@ export type WorkbenchFields = BodyEditorFields & {
 
 export default function APIWorkbench(props: APIWorkbenchProps) {
   if (!props.detail) {
-    return (
-      <Card
-        className="api-request-panel"
-        title="请求编辑"
-        extra={props.requestActions}
-        loading={props.loading}
-      >
-        <Empty description="请选择接口后进行持续编辑" />
-      </Card>
+    return props.renderPanels(
+      <section className="api-panel api-request-panel">
+        <header className="pane-heading"><h2>请求配置</h2></header>
+        <Empty className="workspace-empty" image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={props.loading ? '正在读取接口' : '从目录选择或新建接口'} />
+      </section>,
+      props.response,
     )
   }
   return <LoadedAPIWorkbench {...props} detail={props.detail} />
@@ -80,136 +77,55 @@ function LoadedAPIWorkbench(props: APIWorkbenchProps & { detail: ApiDetail }) {
   const [preview, setPreview] = useState<unknown>(null)
   const draft = useApiDraft(form, props)
   const redactionMode = 'off'
+  const requestTabs = [
+    { key: 'params', label: '参数', children: <ParameterFields onProgrammaticChange={draft.persistCurrent} /> },
+    { key: 'headers', label: '请求头', children: <HeaderFields redactionMode={redactionMode} onProgrammaticChange={draft.persistCurrent} /> },
+    { key: 'variables', label: '变量', children: <KeyValueFields name="variables" redactionMode={redactionMode} /> },
+    { key: 'auth', label: '认证', children: <AuthFields redactionMode={redactionMode} /> },
+    { key: 'body', label: '请求体', children: <BodyEditor artifacts={props.artifacts ?? []} onProgrammaticChange={draft.persistCurrent} /> },
+    { key: 'extract', label: '提取', children: <ExtractionFields /> },
+    { key: 'assertions', label: '断言', children: <AssertionFields /> },
+  ]
   return (
-    <Card
-      className="api-request-panel"
-      loading={props.loading}
-      title={
-        <Space>
-          <span>{props.detail.definition.name}</span>
-          {draft.dirty && <Typography.Text type="warning">未保存</Typography.Text>}
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            aria-label="重命名接口"
-            disabled={props.editable === false}
-            onClick={props.onRename}
-          />
-        </Space>
-      }
-      extra={
-        <Space>
-          <Button
-            loading={props.previewing}
-            onClick={() => void props.onPreview().then(setPreview).catch(() => undefined)}
-          >
-            预览最终请求
-          </Button>
-          <Button
-            disabled={props.editable === false}
-            icon={<SaveOutlined />}
-            loading={props.saving}
-            onClick={() => form.submit()}
-          >
-            保存接口
-          </Button>
-        </Space>
-      }
-    >
-      {draft.error && <Alert type="error" showIcon title={draft.error} />}
-      <Form
-        form={form}
-        disabled={props.editable === false}
-        layout="vertical"
-        onValuesChange={draft.onValuesChange}
-        onFinish={draft.onFinish}
-      >
-        <div className="workbench-request-line">
-          <Form.Item name="method" rules={[{ required: true }]}>
-            <Select
-              className="method-select"
-              options={['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE'].map((value) => ({
-                value,
-                label: value,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="path" rules={[{ required: true, message: '请输入请求路径' }]}>
-            <Input aria-label="请求路径" placeholder="/api/users/{{user_id}}" />
-          </Form.Item>
-          {props.requestActions}
+    <>
+      <Form className="api-workbench-form" form={form} layout="vertical" disabled={props.editable === false}
+        onValuesChange={draft.onValuesChange} onFinish={draft.onFinish}>
+        <div className="api-request-strip">
+          <div className="api-request-identity">
+            <h2>{props.detail.definition.name}</h2>
+            {draft.dirty && <span className="workbench-state" data-dirty>未保存 · 发送使用已保存配置</span>}
+            <Space size={4} className="request-tools">
+              <Button type="text" size="small" icon={<EyeOutlined />} loading={props.previewing}
+                onClick={() => void props.onPreview().then(setPreview).catch(() => undefined)}>预览</Button>
+              {props.actions}
+            </Space>
+          </div>
+          <div className="workbench-request-line">
+            <Form.Item name="method" rules={[{ required: true }]}>
+              <Select aria-label="HTTP 方法" className="method-select"
+                options={['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE'].map((value) => ({ value }))} />
+            </Form.Item>
+            <Form.Item name="path" rules={[{ required: true, message: '请输入请求路径' }]}>
+              <Input aria-label="请求路径" placeholder="/api/orders/{{order_id}}" />
+            </Form.Item>
+            {props.requestActions}
+            <Button icon={<SaveOutlined />} loading={props.saving} htmlType="submit">保存接口</Button>
+          </div>
+          {draft.error && <Alert type="error" showIcon title={draft.error} />}
         </div>
-        <div className="api-request-context">
-          {props.targetActions}
-          <Typography.Text type="secondary">
-            发送与预览使用已保存的请求。
-          </Typography.Text>
-        </div>
-        <Tabs
-          key={props.detail?.definition.id}
-          tabBarGutter={12}
-          items={[
-            {
-              key: 'params',
-              label: 'Params',
-              children: <ParameterFields onProgrammaticChange={draft.persistCurrent} />,
-              forceRender: true,
-            },
-            {
-              key: 'headers',
-              label: 'Headers',
-              children: (
-                <HeaderFields
-                  redactionMode={redactionMode}
-                  onProgrammaticChange={draft.persistCurrent}
-                />
-              ),
-              forceRender: true,
-            },
-            {
-              key: 'variables',
-              label: '接口变量',
-              children: <KeyValueFields name="variables" redactionMode={redactionMode} />,
-              forceRender: true,
-            },
-            {
-              key: 'auth',
-              label: 'Auth',
-              children: <AuthFields redactionMode={redactionMode} />,
-              forceRender: true,
-            },
-            {
-              key: 'body',
-              label: 'Body',
-              children: (
-                <BodyEditor
-                  artifacts={props.artifacts ?? []}
-                  onProgrammaticChange={draft.persistCurrent}
-                />
-              ),
-              forceRender: true,
-            },
-            { key: 'extract', label: '提取', children: <ExtractionFields />, forceRender: true },
-            {
-              key: 'assertions',
-              label: '断言',
-              children: <AssertionFields />,
-              forceRender: true,
-            },
-          ]}
-        />
+        {props.renderPanels(
+          <section className="api-panel api-request-panel" aria-label="请求配置">
+            <header className="pane-heading"><h2>请求配置</h2></header>
+            <Tabs className="workbench-request-tabs" size="small" tabBarGutter={16}
+              items={requestTabs.map((tab) => ({ ...tab, forceRender: true }))} />
+          </section>,
+          props.response,
+        )}
       </Form>
-      <Modal
-        title="最终请求预览"
-        open={preview !== null}
-        footer={null}
-        onCancel={() => setPreview(null)}
-        width={760}
-      >
+      <Modal title="最终请求预览" open={preview !== null} footer={null} onCancel={() => setPreview(null)} width={760}>
         <pre className="preview-code">{JSON.stringify(preview, null, 2)}</pre>
       </Modal>
-    </Card>
+    </>
   )
 }
 

@@ -99,7 +99,7 @@ export type RequestSnapshot = { method: string; url: string; headers: Record<str
 export type ResponseSnapshot = { status_code: number; headers: Record<string, string>; body: unknown; size_bytes: number; duration_ms?: number }
 export type InterfaceRun = {
   execution: {
-    id: string; status: string; elapsed_ms: number
+    id: string; status: string; elapsed_ms: number; started_at: string
     error_code: string | null; error_message: string | null
   }
   request: RequestSnapshot | null

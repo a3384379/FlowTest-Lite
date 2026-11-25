@@ -47,6 +47,7 @@ class Store:
                     data TEXT NOT NULL,
                     PRIMARY KEY (kind, id)
                 );
+                CREATE TABLE IF NOT EXISTS api_groups (name TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS files (
                     id TEXT PRIMARY KEY,
                     filename TEXT NOT NULL,
@@ -120,6 +121,68 @@ class Store:
             deleted = db.execute("DELETE FROM assets WHERE kind=? AND id=?", (kind, key))
             if not deleted.rowcount:
                 raise MissingAsset("记录不存在")
+
+    def groups(self) -> list[str]:
+        with self.connect() as db:
+            rows = db.execute("""
+                SELECT name FROM api_groups
+                UNION
+                SELECT json_extract(data, '$.group') FROM assets
+                WHERE kind='api' AND coalesce(json_extract(data, '$.group'), '') != ''
+                ORDER BY 1
+            """).fetchall()
+        return [row[0] for row in rows]
+
+    def put_group(self, name: str, previous: str | None = None) -> None:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if previous != name and self._group_exists(db, name):
+                raise EditConflict("已有同名分组")
+            if previous is not None:
+                if not self._group_exists(db, previous):
+                    raise MissingAsset("分组已删除，请刷新目录后重试")
+                self._move_group(db, previous, name)
+                db.execute("DELETE FROM api_groups WHERE name=?", (previous,))
+            db.execute("INSERT OR IGNORE INTO api_groups (name) VALUES (?)", (name,))
+
+    def delete_group(self, name: str) -> None:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._move_group(db, name, "")
+            db.execute("DELETE FROM api_groups WHERE name=?", (name,))
+
+    @staticmethod
+    def _group_exists(db: sqlite3.Connection, name: str) -> bool:
+        return db.execute("""
+            SELECT 1 FROM api_groups WHERE name=?
+            UNION ALL
+            SELECT 1 FROM assets WHERE kind='api' AND json_extract(data, '$.group')=?
+            LIMIT 1
+        """, (name, name)).fetchone() is not None
+
+    @staticmethod
+    def _move_group(db: sqlite3.Connection, previous: str, name: str) -> None:
+        db.execute("""
+            UPDATE assets
+            SET data=json_set(data, '$.group', ?), revision=revision + 1
+            WHERE kind='api' AND json_extract(data, '$.group') = ? AND ? != ?
+        """, (name, previous, name, previous))
+
+    def move_apis(self, keys: list[str], name: str) -> None:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for key in keys:
+                result = db.execute("""
+                    UPDATE assets
+                    SET data=json_set(data, '$.group', ?), revision=revision + 1
+                    WHERE kind='api' AND id=? AND json_extract(data, '$.group') IS NOT ?
+                """, (name, key, name))
+                if not result.rowcount and db.execute(
+                    "SELECT 1 FROM assets WHERE kind='api' AND id=?", (key,)
+                ).fetchone() is None:
+                    raise MissingAsset("有接口已删除，请刷新目录后重试")
+            if name:
+                db.execute("INSERT OR IGNORE INTO api_groups (name) VALUES (?)", (name,))
 
     def upload(self, filename: str, content_type: str, content: bytes) -> dict:
         row = {

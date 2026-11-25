@@ -1,3 +1,6 @@
+import { Link } from 'react-router-dom'
+import { ApiOutlined } from '@ant-design/icons'
+import { HttpMethodBadge } from '../features/api-console/ApiDirectory'
 import { Alert, Checkbox, Form, Input, InputNumber, Select, Space, Typography } from 'antd'
 import { editorNode, restoreEditedNode, adjacency, reachable } from './editor/graph-analysis'
 import type { ApiDefinition, Artifact, WorkflowDefinition, WorkflowNode, WorkflowRegion } from '../lib/api'
@@ -42,6 +45,7 @@ export default function NodeInspector(props: Props) {
     )
   }
   const type = node.type
+  const referencedApi = apis.find((api) => api.id === config.api_definition_id)
   const allowedSources = sourceNodes(definition, node)
   return (
     <Form layout="vertical" component="div" disabled={!editable}>
@@ -54,10 +58,17 @@ export default function NodeInspector(props: Props) {
             <Select
               aria-label="引用接口" showSearch optionFilterProp="label" placeholder="选择已保存的接口"
               value={typeof config.api_definition_id === 'string' && config.api_definition_id ? config.api_definition_id : undefined}
-              options={apis.map((api) => ({ value: api.id, label: `${api.name} · ${api.method} ${api.path}` }))}
+              options={apis.map((api) => ({ value: api.id, label: api.name }))}
               onChange={(api_definition_id) => change({ api_definition_id, api_version: undefined, request_overrides: {} })}
             />
           </Form.Item>
+          {referencedApi && (
+            <div className="inspector-api-reference">
+              <HttpMethodBadge method={referencedApi.method} />
+              <code>{referencedApi.path}</code>
+              <Link to={`/apis?id=${referencedApi.id}`} title="在接口工作台打开" aria-label="打开引用接口"><ApiOutlined /></Link>
+            </div>
+          )}
           <WorkflowApiRequestEditor node={node} artifacts={props.artifacts} environmentId={props.environment} editable={editable}
             onUpdate={(updated) => onUpdate(restoreEditedNode(original, updated))} />
           <Form.Item label="预期 HTTP 状态码">
