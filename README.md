@@ -36,6 +36,22 @@ uv run --locked python -m app
 - 应用节点修改并保存流程，然后运行。可取消运行。在运行视图中通过画布和时间线选择节点，查看错误、实际请求、响应、预期值和实际值。运行记录保留在当前服务进程，最多保留 12 次、并发运行最多 4 次。保存的接口和流程在重启后可重新打开。
 - 页面与其他调用方共用同一个本地 API 和执行核心。服务启动后可在 [本地 API 文档](http://127.0.0.1:8765/docs) 查看路径和请求模型。
 
+## 在 Codex 中使用 MCP
+
+先按「本机启动」启动 Lite。MCP 通过 `stdio` 启动并连接同一个本地服务，因此能读取页面保存的接口和流程。MCP 依赖由 `--extra mcp` 安装。把下方路径换成你的 Lite 仓库绝对路径，然后注册到 Codex。
+
+```sh
+codex mcp add flowtest-lite -- uv --directory "/path/to/FlowTest-Lite" run --locked --extra mcp python -m app.mcp_server
+```
+
+如果 Web 服务用了自定义端口，在命令末尾追加相同的 `--port`。重新打开 Codex 会话后，可让它先列出接口或流程。注册方式见 [Codex MCP 文档](https://developers.openai.com/codex/mcp)。
+
+- **接口管理**用 `api_list`、`api_get`、`api_create`、`api_update`、`api_delete`。`api_update` 接收最新 `revision` 和 `changes`，只修改给出的字段。导入用 `api_import_preview` 和 `api_import_save`，调试用 `api_preview` 和 `api_send`。
+- **流程编排**用 `workflow_list`、`workflow_get`、`workflow_create`、`workflow_update`、`workflow_delete`。`workflow_update` 接收最新 `revision`，可替换完整的 `definition`，或通过 `graph` 在一次保存中增删改主画布节点和连线。删除节点时同时列出需要删除的连线。内联区域和运行设置可用完整定义修改，结构可用 `workflow_validate` 提前检查。
+- **流程运行**用 `workflow_run` 启动，`workflow_run_get` 查看进度和结果，`workflow_run_cancel` 取消。用 `environment_list` 查环境 ID。读取运行结果时指定 `node_id` 可查看该步实际请求、响应、提取和断言。保存的数据在页面刷新后可见。
+
+读取完整接口配置、实际请求或响应时，内容会交给 MCP 客户端。查看大量响应时可用 `api_send` 的 `detail: "summary"`，流程运行默认先返回状态摘要。
+
 ## 当前限制
 
 - 旧流程中的平台资源、固定发布版本、引用型子流程、外部协议和数据节点会报错。内联区域支持本地 HTTP 与流程控制。

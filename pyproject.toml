@@ -14,5 +14,10 @@ dependencies = [
   "uvicorn>=0.34,<1",
 ]
 
+[project.optional-dependencies]
+mcp = [
+  "mcp>=1.28,<2",
+]
+
 [tool.uv]
 package = false
