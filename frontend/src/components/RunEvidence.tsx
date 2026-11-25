@@ -117,24 +117,28 @@ export function NodeResultView({ item }: { item: NodeExecution }) {
   const comparison = typeof output === 'object' && output !== null && 'expected' in output && 'actual' in output
     ? { expected: output.expected, actual: output.actual }
     : null
+  const comparisonDetails = comparison && <Descriptions size="small" column={1} items={[
+    { key: 'expected', label: '预期值', children: <CodeValue value={comparison.expected} /> },
+    { key: 'actual', label: '实际值', children: <CodeValue value={comparison.actual} /> },
+  ]} />
+  const checks = result?.assertions ?? []
+  const failedAssertion = item.error_code === 'WORKFLOW_ASSERTION_FAILED' && Boolean(comparison) && !checks.length
+  const showAssertions = item.status === 'failed' && (checks.length > 0 || failedAssertion)
   const observations = result?.observations ?? []
   const attemptLabel = observations.length ? `请求 / 响应（${observations.length}）` : '请求 / 响应'
   return (
     <section className="node-result">
       <div className="node-result-heading"><strong>{item.name}</strong><Status status={item.status} /></div>
       {item.error_message && <Alert showIcon type="error" title={item.error_message} description={item.error_code} />}
-      {comparison && <Descriptions size="small" column={1} items={[
-        { key: 'expected', label: '预期值', children: <CodeValue value={comparison.expected} /> },
-        { key: 'actual', label: '实际值', children: <CodeValue value={comparison.actual} /> },
-      ]} />}
-      <Tabs size="small" defaultActiveKey={item.status === 'failed' && result?.assertions.length ? 'assertions' : observations.length ? 'http' : 'output'}
+      {!failedAssertion && comparisonDetails}
+      <Tabs size="small" defaultActiveKey={showAssertions ? 'assertions' : observations.length ? 'http' : 'output'}
         items={[
           { key: 'http', label: attemptLabel, children: observations.length > 1 ? (
             <Tabs size="small" defaultActiveKey={String(observations.length - 1)} items={observations.map((attempt, index) => ({
               key: String(index), label: `第 ${attempt.attempt} 次`, children: <AttemptEvidence attempt={attempt} />,
             }))} />
           ) : observations[0] ? <AttemptEvidence attempt={observations[0]} /> : <Empty description="本节点暂无 HTTP 记录" /> },
-          { key: 'assertions', label: '断言', children: <Assertions checks={result?.assertions ?? []} /> },
+          { key: 'assertions', label: '断言', children: failedAssertion ? comparisonDetails : <Assertions checks={checks} /> },
           { key: 'output', label: '输出', children: output == null ? <Empty description="暂无节点输出" />
             : <ResponseCodeReader title="节点输出" value={output} /> },
         ]} />

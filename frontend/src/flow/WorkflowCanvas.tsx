@@ -1,14 +1,14 @@
 import {
-  AimOutlined, ApiOutlined, ApartmentOutlined, AppstoreOutlined, BranchesOutlined, CheckCircleOutlined,
-  ClockCircleOutlined, ExportOutlined, FlagOutlined, FullscreenExitOutlined, FullscreenOutlined,
-  PlayCircleOutlined, RedoOutlined, UndoOutlined,
+  ApartmentOutlined, AppstoreOutlined, CloseOutlined, DeploymentUnitOutlined, FullscreenExitOutlined,
+  FullscreenOutlined, RadarChartOutlined, RedoOutlined, UndoOutlined,
 } from '@ant-design/icons'
 import {
-  Background, BaseEdge, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, getBezierPath,
+  Background, BaseEdge, ControlButton, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow,
+  getBezierPath, useStore,
   type Connection, type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Alert, Button, Checkbox, Empty, Space, Tabs, Tooltip } from 'antd'
+import { Alert, Button, Empty, Tabs, Tooltip } from 'antd'
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { NodeResultView, statusLabel } from '../components/RunEvidence'
 import type { ApiDefinition, Artifact, FlowRun, WorkflowDefinition, WorkflowNode } from '../lib/api'
@@ -25,7 +25,8 @@ import { dataReferences, nodePresentation, type RegionPreview } from './editor/n
 import { useWorkflowEditor } from './editor/use-workflow-editor'
 import { useDraftSession } from '../features/drafts/draft-session'
 import { useNodeSelectionGuard } from './editor/use-node-selection-guard'
-import { addApiNode, addTypedNode, autoLayoutWorkflow, insertNodeOnEdge, pasteNode, type PaletteNodeType } from './workflow-graph'
+import { addApiNode, addTypedNode, autoLayoutWorkflow, insertNodeOnEdge, pasteNode, workflowNodeSize, type PaletteNodeType } from './workflow-graph'
+import WorkflowNodeIcon from './WorkflowNodeIcon'
 import WorkflowNodeLibrary, { NODE_DRAG_FORMAT, nodeChoice, type NodeChoice } from './WorkflowNodeLibrary'
 import WorkflowNodeRelations from './WorkflowNodeRelations'
 import WorkflowRunTimeline from './WorkflowRunTimeline'
@@ -36,10 +37,11 @@ type NodeData = {
   label: string
   nodeType: WorkflowNode['type']
   typeLabel: string
+  control?: string
   status: string
-  runtimeLabel: string
-  summary?: string
-  regions?: RegionPreview[]
+  endpoint?: { method: string; path: string; statusCode?: number }
+  summary: string
+  regions: RegionPreview[]
   inspectionMode: NodeInspectionMode
   canCopy: boolean
   canDelete: boolean
@@ -57,14 +59,17 @@ type CanvasEdge = Edge<{
 
 const nodeTypes = { workflowNode: WorkflowNodeCard }
 const edgeTypes = { workflowEdge: WorkflowCanvasEdge }
-const fitOptions = { padding: 0.13, maxZoom: 1.12 }
-const labels: Record<WorkflowNode['type'], string> = {
-  api: '接口', start: '开始', end: '结束', extract: '提取变量', assert: '断言',
-  condition: '条件分支', delay: '等待', capability: '控制块',
+const fitOptions = { padding: 0.14, maxZoom: 1.2 }
+const canvasLabels = {
+  'controls.zoomIn.ariaLabel': '放大',
+  'controls.zoomOut.ariaLabel': '缩小',
+  'controls.fitView.ariaLabel': '适应画布',
+  'controls.interactive.ariaLabel': '切换画布交互',
+  'minimap.ariaLabel': '流程缩略图',
 }
-const nodeIcons: Partial<Record<WorkflowNode['type'], ReactNode>> = {
-  start: <PlayCircleOutlined />, end: <FlagOutlined />, extract: <ExportOutlined />,
-  assert: <CheckCircleOutlined />, condition: <BranchesOutlined />, delay: <ClockCircleOutlined />,
+const labels: Record<WorkflowNode['type'], string> = {
+  api: 'HTTP 请求', start: '开始', end: '结束', extract: '提取变量', assert: '断言校验',
+  condition: '条件判断', delay: '等待', capability: '流程控制',
 }
 
 type Props = {
@@ -140,8 +145,9 @@ export default function WorkflowCanvas({
     if (node) {
       const { x, y } = node.position
       const zoom = canvas.current?.getZoom() ?? 1
+      const { width, height } = workflowNodeSize(node.data.nodeType)
       requestAnimationFrame(() => void canvas.current?.setCenter(
-        x + (node.measured?.width ?? 220) / 2, y + (node.measured?.height ?? 90) / 2,
+        x + width / 2, y + height / 2,
         { zoom, duration: 180 },
       ))
     }
@@ -207,17 +213,23 @@ export default function WorkflowCanvas({
   const nodes: CanvasNode[] = current.nodes.map((node) => {
     const type = resolveEffectiveNodeType(node)
     const result = editing ? undefined : runNodes.get(node.id)
-    const view = nodePresentation(node, current, apis)
+    const presentation = nodePresentation(node, current, apis)
+    const { width, height } = workflowNodeSize(type)
+    const attempt = type === 'api' ? result?.result?.observations.at(-1) : undefined
     return {
       id: node.id, type: 'workflowNode',
-      initialWidth: 196,
-      initialHeight: (editing ? 80 : 109) + 50 * view.regions.length,
+      initialWidth: width, initialHeight: height,
+      style: { width, height },
       position: editor.positions.get(node.id) ?? node.position,
       selected: activeNodeId === node.id,
       data: {
-        label: node.name, nodeType: type, typeLabel: controlCapabilityLabel(node.capability_id) ?? labels[type],
-        status: result?.status ?? 'pending', runtimeLabel: result?.attempts ? `${result.attempts} 次` : '',
-        ...view,
+        ...presentation,
+        label: node.name,
+        nodeType: type,
+        typeLabel: controlCapabilityLabel(node.capability_id) ?? labels[type],
+        control: node.capability_id?.split('.').at(-1),
+        status: result?.status ?? 'pending',
+        endpoint: attempt ? { method: attempt.request.method, path: attempt.request.url, statusCode: attempt.response?.status_code } : presentation.endpoint,
         inspectionMode: editing ? 'configuration' : 'execution',
         canCopy: editing && type !== 'start' && type !== 'end',
         canDelete: editing && type !== 'start' && (type !== 'end' || current.nodes.filter((item) => item.type === 'end').length > 1),
@@ -231,8 +243,8 @@ export default function WorkflowCanvas({
     id: edge.id, source: edge.source, target: edge.target, type: 'workflowEdge',
     sourceHandle: edge.condition ?? 'out',
     selected: editing && selectedEdge?.id === edge.id,
-    markerEnd: { type: MarkerType.ArrowClosed },
-    label: edge.condition === 'true' ? '真' : edge.condition === 'false' ? '假' : undefined,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: edgeTone(edge.condition).stroke },
+    label: edge.condition === 'true' ? '成立' : edge.condition === 'false' ? '否则' : undefined,
     data: {
       branch: edge.condition, editable: editing,
       onConfigure: () => inspect('edge', edge.id),
@@ -250,7 +262,7 @@ export default function WorkflowCanvas({
         sourceHandle: source && resolveEffectiveNodeType(source) === 'condition' ? 'true' : 'out',
         selectable: false, reconnectable: false, focusable: false,
         className: 'workflow-data-reference',
-        style: { stroke: 'var(--ft-brand-decorative)', strokeDasharray: '5 5' },
+        style: { stroke: 'var(--ft-icon-extract)', strokeDasharray: '5 5' },
       })
     }
   }
@@ -260,35 +272,35 @@ export default function WorkflowCanvas({
       {guard.dialog}
       <div className="canvas-toolbar">
         <div className="canvas-mode-controls">{modeControls}</div>
-        <Space wrap size={5} className="canvas-tools" aria-label="画布工具">
+        <div className="canvas-tools" role="group" aria-label="画布工具">
           {editing && <>
             <Button type="text" size="small" icon={<AppstoreOutlined />}
               className="canvas-tools-toggle" aria-label="节点库" aria-pressed={libraryOpen && !focus}
               onClick={() => { setFocus(false); setLibraryOpen(focus || !libraryOpen) }}>节点库</Button>
-            <Tooltip title="撤销（Ctrl/⌘ + Z）"><Button type="text" size="small" aria-label="撤销" icon={<UndoOutlined />} disabled={!editor.past.length} onClick={() => mutate(editor.undo)} /></Tooltip>
-            <Tooltip title="重做（Ctrl/⌘ + Shift + Z）"><Button type="text" size="small" aria-label="重做" icon={<RedoOutlined />} disabled={!editor.future.length} onClick={() => mutate(editor.redo)} /></Tooltip>
-            <Tooltip title="自动布局">
-              <Button type="text" size="small" aria-label="自动布局" icon={<ApartmentOutlined />} onClick={() => mutate(() => {
-                editor.commit(autoLayoutWorkflow(editor.latest.current.definition))
-                fitCanvas()
-              })} />
-            </Tooltip>
-          </>}
-          <Tooltip title="适应画布"><Button type="text" size="small" aria-label="适应画布" icon={<AimOutlined />} onClick={fitCanvas} /></Tooltip>
-          {editing && <>
-            <Checkbox checked={relations} onChange={(event) => setRelations(event.target.checked)}>数据引用</Checkbox>
+            <div className="canvas-tool-group">
+              <Tooltip placement="bottom" title="撤销（Ctrl/⌘ + Z）"><Button type="text" size="small" aria-label="撤销" icon={<UndoOutlined />} disabled={!editor.past.length} onClick={() => mutate(editor.undo)} /></Tooltip>
+              <Tooltip placement="bottom" title="重做（Ctrl/⌘ + Shift + Z）"><Button type="text" size="small" aria-label="重做" icon={<RedoOutlined />} disabled={!editor.future.length} onClick={() => mutate(editor.redo)} /></Tooltip>
+              <Tooltip placement="bottom" title="自动布局">
+                <Button type="text" size="small" aria-label="自动布局" icon={<ApartmentOutlined />} onClick={() => mutate(() => {
+                  editor.commit(autoLayoutWorkflow(editor.latest.current.definition))
+                  fitCanvas()
+                })} />
+              </Tooltip>
+            </div>
+            <Button type="text" size="small" icon={<DeploymentUnitOutlined />} className="canvas-tools-toggle"
+              aria-pressed={relations} onClick={() => setRelations(!relations)}>数据引用</Button>
             <WorkflowSettingsEditor definition={current} editable historical={false}
               beforeOpen={guard.request} onChange={(next) => editor.commit(next)} />
-            <Tooltip title={focus ? '退出专注' : '专注模式'}>
+            <Tooltip placement="bottom" title={focus ? '退出专注' : '专注模式'}>
               <Button type="text" size="small" aria-label={focus ? '退出专注' : '专注模式'} aria-pressed={focus}
                 icon={focus ? <FullscreenExitOutlined /> : <FullscreenOutlined />} onClick={() => mutate(() => setFocus(!focus))} />
             </Tooltip>
           </>}
-        </Space>
+        </div>
       </div>
       <div className="lite-flow-grid" data-inspector={inspecting && !focus} data-library={editing && libraryOpen && !focus}>
         {editing && !focus && libraryOpen && <WorkflowNodeLibrary apis={apis} apiId={activeApi?.id} setApiId={setApiId}
-          open={libraryOpen} onAdd={(type) => mutate(() => add(type))} />}
+          onClose={() => setLibraryOpen(false)} onAdd={(type) => mutate(() => add(type))} />}
         <div className="lite-flow-center">
           <div ref={canvasHost} className="workflow-canvas lite-canvas" aria-label="流程画布" tabIndex={0}
             onKeyDown={hotkeys} onDragOver={dragOver} onDrop={drop}>
@@ -301,7 +313,7 @@ export default function WorkflowCanvas({
             <ReactFlow<CanvasNode, CanvasEdge>
               nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
               fitView fitViewOptions={fitOptions} onInit={(instance) => { canvas.current = instance }}
-              minZoom={0.15} maxZoom={1.7} deleteKeyCode={null}
+              minZoom={0.15} maxZoom={1.7} deleteKeyCode={null} ariaLabelConfig={canvasLabels}
               nodesDraggable={editing} nodesConnectable={editing} edgesReconnectable={editing}
               onConnect={(value) => { if (editing) editor.accept(connectGraphNodes(editor.latest.current.definition, connection(value))) }}
               onReconnect={(edge, value) => { if (editing) editor.accept(reconnectGraphEdge(editor.latest.current.definition, edge.id, connection(value))) }}
@@ -316,9 +328,8 @@ export default function WorkflowCanvas({
                 }
               }}
             >
-              <Background gap={22} size={1.15} color="var(--ft-grid-dot)" />
-              <Controls position="bottom-right" showInteractive={editing} />
-              <MiniMap position="bottom-left" style={{ width: 180, height: 112 }} pannable zoomable />
+              <Background gap={20} size={1.2} color="var(--canvas-grid-dot)" />
+              <CanvasNavigation editing={editing} />
             </ReactFlow>
           </div>
           {!editing && run && <WorkflowRunTimeline key={run.id} run={run} selected={execution?.node_id}
@@ -328,7 +339,7 @@ export default function WorkflowCanvas({
           <aside className="lite-flow-inspector" aria-label={editing ? '流程检查器' : '节点运行详情'}>
             <header className="pane-heading">
               <h2>{editing ? (selectedEdge ? '连线配置' : '节点配置') : '节点运行详情'}</h2>
-              {editing && <Button type="text" size="small" onClick={() => mutate(() => editor.select(null))}>关闭</Button>}
+              {editing && <Button type="text" size="small" icon={<CloseOutlined />} aria-label="关闭配置" onClick={() => mutate(() => editor.select(null))} />}
             </header>
             <div className="lite-inspector-content">
               {!editing && execution && <NodeResultView key={execution.node_id} item={execution} />}
@@ -375,6 +386,11 @@ export default function WorkflowCanvas({
 function WorkflowNodeCard({ data, selected }: NodeProps<CanvasNode>) {
   const terminal = data.nodeType === 'end'
   const start = data.nodeType === 'start'
+  const boundary = terminal || start
+  const regionDetails = data.regions.map(({ label, steps }) => `${label}：${steps.join(' → ') || '尚未配置步骤'}`)
+  const internalSteps = data.regions.reduce((total, region) => total + region.steps.length, 0)
+  const endpoint = data.endpoint
+  const path = endpoint?.path.replace(/^(?:https?:)?\/\/[^/?#]+/i, '').replace(/^(?=[?#])/, '/') || '/'
   return (
     <>
       <WorkflowNodeActions
@@ -386,25 +402,35 @@ function WorkflowNodeCard({ data, selected }: NodeProps<CanvasNode>) {
         onCopy={data.onCopy ?? (() => undefined)}
         onDelete={data.onDelete ?? (() => undefined)}
       />
-      <div className={`flow-node flow-node-${data.nodeType} is-${data.status}`}>
+      <div className="flow-node" data-node-type={data.nodeType} data-boundary={boundary} data-status={data.status}>
         {!start && <Handle type="target" position={Position.Left} />}
         <div className="flow-node-heading">
-          <span className="flow-node-icon">{(nodeIcons[data.nodeType] ?? <ApiOutlined />)}</span>
-          <span className="flow-node-copy">
-            <strong>{data.label}</strong>
-            <small>{data.typeLabel}</small>
-          </span>
+          <WorkflowNodeIcon type={data.nodeType} control={data.control} />
+          <strong className="flow-node-name" title={data.label}>
+            {data.label}
+          </strong>
+          {data.inspectionMode === 'execution' && (
+            <span className="flow-node-state" title={endpoint?.statusCode ? `HTTP ${endpoint.statusCode}` : undefined}>
+              {statusLabel[data.status] ?? data.status}
+            </span>
+          )}
         </div>
-        <div className="flow-node-summary" title={data.summary}>
-          {data.summary}
-        </div>
-        <NodeRegionPreview regions={data.regions ?? []} />
-        {data.inspectionMode === 'execution' && <NodeFooter data={data} />}
+        {!boundary && (endpoint ? (
+          <div className="flow-node-detail flow-node-endpoint" title={`${endpoint.method} ${endpoint.path}`}>
+            <span className="http-method" data-method={endpoint.method}>{endpoint.method}</span>
+            <code>{path}</code>
+          </div>
+        ) : (
+          <div className="flow-node-detail">
+            <span className="flow-node-detail-text" title={data.summary || data.typeLabel}>{data.summary || data.typeLabel}</span>
+            {regionDetails.length > 0 && <span className="flow-node-step-count" title={regionDetails.join('\n')}>{internalSteps} 步</span>}
+          </div>
+        ))}
         {!terminal &&
           (data.nodeType === 'condition' ? (
             <>
-              <Handle type="source" id="true" position={Position.Right} style={{ top: '30%' }} />
-              <Handle type="source" id="false" position={Position.Right} style={{ top: '75%' }} />
+              <Handle type="source" id="true" position={Position.Right} aria-label="成立出口" />
+              <Handle type="source" id="false" position={Position.Right} aria-label="否则出口" />
             </>
           ) : (
             <Handle type="source" id="out" position={Position.Right} />
@@ -414,31 +440,26 @@ function WorkflowNodeCard({ data, selected }: NodeProps<CanvasNode>) {
   )
 }
 
-function NodeRegionPreview({ regions }: { regions: RegionPreview[] }) {
-  if (!regions.length) return null
+function CanvasNavigation({ editing }: { editing: boolean }) {
+  const zoom = useStore((state) => Math.round(state.transform[2] * 100))
+  const [overview, setOverview] = useState(false)
   return (
-    <div className="flow-node-regions">
-      {regions.map((region) => (
-        <div key={region.id}>
-          <strong>
-            {region.label} · {region.steps.length} 步
-          </strong>
-          <small>{region.steps.join(' → ') || '尚未配置步骤'}</small>
-        </div>
-      ))}
-    </div>
+    <>
+      <Controls position="bottom-right" orientation="horizontal" fitViewOptions={fitOptions}
+        showInteractive={editing} aria-label="画布导航">
+        <span className="canvas-zoom" aria-label={`缩放 ${zoom}%`}>{zoom}%</span>
+        <ControlButton aria-label="流程缩略图" title="流程缩略图" aria-pressed={overview}
+          onClick={() => setOverview(!overview)}><RadarChartOutlined /></ControlButton>
+      </Controls>
+      {overview && <MiniMap<CanvasNode> position="bottom-right" nodeBorderRadius={10} pannable zoomable />}
+    </>
   )
 }
 
-function NodeFooter({ data }: { data: NodeData }) {
-  return (
-    <footer className="flow-node-footer">
-      <span className="flow-node-status">
-        {statusLabel[data.status] ?? data.status}
-        {data.runtimeLabel && <small>{data.runtimeLabel}</small>}
-      </span>
-    </footer>
-  )
+function edgeTone(branch: NonNullable<CanvasEdge['data']>['branch']) {
+  if (branch === 'true') return { stroke: 'var(--canvas-branch-true)', background: 'var(--ft-success-bg)' }
+  if (branch === 'false') return { stroke: 'var(--canvas-branch-false)', background: 'var(--ft-warning-bg)' }
+  return { stroke: 'var(--canvas-edge)', background: 'var(--ft-surface)' }
 }
 
 function WorkflowCanvasEdge({
@@ -463,9 +484,15 @@ function WorkflowCanvasEdge({
     sourcePosition,
     targetPosition,
   })
+  const tone = edgeTone(data?.branch ?? null)
+  const stroke = selected ? 'var(--ft-brand)' : tone.stroke
   return (
     <>
-      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} label={label} />
+      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={{ stroke, ...style }}
+        label={label} labelX={centerX} labelY={centerY}
+        labelStyle={{ fill: data ? tone.stroke : 'var(--ft-icon-extract)' }}
+        labelBgStyle={{ fill: tone.background, stroke: 'var(--ft-border-subtle)' }}
+        labelBgPadding={[6, 4]} labelBgBorderRadius={7} />
       {data && (
         <WorkflowEdgeActions
           edgeId={id}

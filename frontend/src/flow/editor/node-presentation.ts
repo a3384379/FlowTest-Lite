@@ -24,6 +24,7 @@ export function nodePresentation(
 ): {
   summary: string
   regions: RegionPreview[]
+  endpoint?: { method: string; path: string }
 } {
   const regions = (definition.regions ?? [])
     .filter((region) => region.owner_node_id === node.id)
@@ -32,21 +33,26 @@ export function nodePresentation(
       label: regionLabels[region.role] ?? region.role,
       steps: region.nodes.map((child) => child.name),
     }))
-  return { summary: nodeSummary(node, definition, apis), regions }
+  const type = resolveEffectiveNodeType(node)
+  const config = effectiveConfig(node)
+  if (type === 'api') {
+    const api = apis.find((item) => item.id === config.api_definition_id)
+    if (!api) return { summary: '请选择本地接口', regions }
+    return { summary: '', regions, endpoint: { method: api.method, path: api.path } }
+  }
+  return { summary: nodeSummary(node, type, config, definition), regions }
 }
 
 function nodeSummary(
   node: WorkflowNode,
+  type: WorkflowNode['type'],
+  config: Record<string, unknown>,
   definition: WorkflowDefinition,
-  apis: ApiDefinition[],
 ): string {
-  const config = effectiveConfig(node)
-  const type = resolveEffectiveNodeType(node)
   const source = sourceSummary(config, definition)
   if (source) return sourceIntent(type, config, source, definition)
-  if (type === 'api') return apiSummary(config, apis)
-  if (type === 'start') return '流程入口'
-  if (type === 'end') return '流程出口'
+  if (type === 'start' || type === 'end') return ''
+  if (type === 'extract' || type === 'assert' || type === 'condition') return '请选择来源节点'
   if (type === 'delay' && typeof config.seconds === 'number') return `等待 ${config.seconds} 秒`
   if (node.capability_id?.startsWith('flow.control.'))
     return controlSummary(config, node, definition)
@@ -102,11 +108,6 @@ function controlSummary(
   if (typeof policy.on_error === 'string') parts.push(`异常：${policy.on_error}`)
   if (typeof policy.timeout_seconds === 'number') parts.push(`最长 ${policy.timeout_seconds} 秒`)
   return parts.join(' · ') || '配置条件与内部步骤'
-}
-
-function apiSummary(config: Record<string, unknown>, apis: ApiDefinition[]): string {
-  const api = apis.find((item) => item.id === config.api_definition_id)
-  return api ? `${api.method} ${api.path}` : '请选择本地接口'
 }
 
 function controlIntent(

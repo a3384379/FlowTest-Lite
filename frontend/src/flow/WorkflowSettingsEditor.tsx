@@ -30,7 +30,7 @@ export default function WorkflowSettingsEditor(props: SettingsProps) {
   }
   return (
     <>
-      <Tooltip title="流程设置">
+      <Tooltip placement="bottom" title="流程设置">
         <Button type="text" size="small" aria-label="流程设置" icon={<SettingOutlined />} onClick={() => void show()} />
       </Tooltip>
       <Drawer

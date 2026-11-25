@@ -5,6 +5,12 @@ import type { WorkflowDefinition, WorkflowNode } from '../lib/api'
 
 export type PaletteNodeType = 'extract' | 'assert' | 'condition' | 'delay' | 'end'
 
+export function workflowNodeSize(type: WorkflowNode['type']) {
+  return type === 'start' || type === 'end'
+    ? { width: 132, height: 52 }
+    : { width: 228, height: 82 }
+}
+
 export function insertNodeOnEdge(
   definition: WorkflowDefinition,
   nodeId: string,
@@ -81,8 +87,10 @@ function uniqueNodeId(definition: WorkflowDefinition, prefix: string): string {
 }
 
 function nextPosition(definition: WorkflowDefinition) {
-  const maxX = Math.max(0, ...definition.nodes.map((node) => node.position.x))
-  return { x: maxX + 220, y: 120 + (definition.nodes.length % 3) * 100 }
+  const rightmost = Math.max(0, ...definition.nodes.map((node) =>
+    node.position.x + workflowNodeSize(resolveEffectiveNodeType(node)).width,
+  ))
+  return { x: rightmost + 64, y: 120 + (definition.nodes.length % 3) * 112 }
 }
 
 function defaultNodeName(type: PaletteNodeType): string {
@@ -169,15 +177,27 @@ export function pasteNode(
 
 export function autoLayoutWorkflow(definition: WorkflowDefinition): WorkflowDefinition {
   const levels = workflowLevels(definition)
+  const columnWidths = new Map<number, number>()
+  for (const node of definition.nodes) {
+    const level = mapValue(levels, node.id)
+    const { width } = workflowNodeSize(resolveEffectiveNodeType(node))
+    columnWidths.set(level, Math.max(columnWidths.get(level) ?? 0, width))
+  }
+  const columns = new Map<number, number>()
+  let x = 0
+  for (const [level, width] of [...columnWidths].sort(([a], [b]) => a - b)) {
+    columns.set(level, x)
+    x += width + 64
+  }
   const main = layoutPhase(
     definition.nodes.filter((node) => node.phase !== 'cleanup'),
-    levels,
+    levels, columns,
     0,
   )
-  const cleanupOffset = Math.max(0, ...[...main.values()].map((position) => position.y)) + 240
+  const cleanupOffset = Math.max(0, ...[...main.values()].map((position) => position.y)) + 156
   const cleanup = layoutPhase(
     definition.nodes.filter((node) => node.phase === 'cleanup'),
-    levels,
+    levels, columns,
     cleanupOffset,
   )
   const positions = new Map([...main, ...cleanup])
@@ -189,14 +209,15 @@ export function autoLayoutWorkflow(definition: WorkflowDefinition): WorkflowDefi
     })),
   }
 }
-function layoutPhase(nodes: WorkflowNode[], levels: Map<string, number>, offset: number) {
+function layoutPhase(nodes: WorkflowNode[], levels: Map<string, number>, columns: Map<number, number>, offset: number) {
   const rows = new Map<number, number>()
   return new Map(
     nodes.map((node) => {
       const level = levels.get(node.id) ?? 0
       const row = rows.get(level) ?? 0
-      rows.set(level, row + 1)
-      return [node.id, { x: level * 320, y: row * 120 + offset }]
+      const { height } = workflowNodeSize(resolveEffectiveNodeType(node))
+      rows.set(level, row + height + 38)
+      return [node.id, { x: columns.get(level) ?? 0, y: row + offset }]
     }),
   )
 }
