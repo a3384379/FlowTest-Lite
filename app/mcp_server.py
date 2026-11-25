@@ -1,4 +1,7 @@
 import argparse
+import asyncio
+import sys
+import webbrowser
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -9,7 +12,11 @@ from mcp.types import ToolAnnotations
 from pydantic import Field, JsonValue
 
 from app.engine.contracts import WorkflowDefinition, WorkflowEdge, WorkflowNode
+from app.mcp_views import api_auth_key, api_definition_view, http_view, masked_url, run_node_view
 from app.models import ApiAsset, ImportOptions, Model, RunOptions, SendOptions, WorkflowAsset
+from app.service_launcher import (
+    DEFAULT_PORT, SERVICE_API_VERSION, SERVICE_NAME, ServiceLaunchError, data_directory, data_store_id, ensure_service,
+)
 from app.workflow_runtime import validate_definition
 
 Revision = Annotated[int, Field(ge=1, description="最近一次读取到的 revision")]
@@ -21,6 +28,7 @@ READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 CREATE = ToolAnnotations(destructiveHint=False, idempotentHint=False, openWorldHint=False)
 WRITE = ToolAnnotations(destructiveHint=True, idempotentHint=False, openWorldHint=False)
 EXECUTE = ToolAnnotations(destructiveHint=True, idempotentHint=False, openWorldHint=True)
+OPEN = ToolAnnotations(destructiveHint=False, idempotentHint=False, openWorldHint=False)
 
 
 class GraphChanges(Model):
@@ -34,17 +42,31 @@ class GraphChanges(Model):
 
 
 class LiteClient:
-    def __init__(self, port: int) -> None:
+    def __init__(self, port: int, auto_start: bool) -> None:
         self.port = port
+        self.auto_start = auto_start
+        self.origin = f"http://127.0.0.1:{port}"
+        self.expected_store = data_store_id(data_directory() / "library.sqlite3") if auto_start else None
 
-    async def request(self, method: str, path: str, *, body: JsonValue = None, revision: int | None = None) -> Any:
-        params = {"revision": revision} if revision is not None else None
+    async def ready(self) -> None:
+        try:
+            await asyncio.to_thread(ensure_service, self.port)
+        except ServiceLaunchError as error:
+            raise ToolError(str(error)) from error
+
+    async def request(
+        self, method: str, path: str, *, body: JsonValue = None, params: dict[str, str | int] | None = None,
+    ) -> Any:
+        if self.auto_start:
+            await self.ready()
         try:
             async with httpx.AsyncClient(
-                base_url=f"http://127.0.0.1:{self.port}/api/",
+                base_url=f"{self.origin}/api/",
                 timeout=httpx.Timeout(330, connect=3),
                 trust_env=False,
             ) as client:
+                if method != "GET" and not path.endswith("/preview"):
+                    await self.verify_write_target(client)
                 response = await client.request(method, path, json=body, params=params)
         except httpx.ConnectError as error:
             raise ToolError(f"无法连接 FlowTest-Lite。请先运行 uv run --locked python -m app --port {self.port}") from error
@@ -67,6 +89,18 @@ class LiteClient:
             raise ToolError("FlowTest-Lite HTTP 409：记录已有更新，请重新读取 revision 和内容")
         return {key: value for key, value in current.items() if key not in {"id", "revision", "updated_at"}}
 
+    async def verify_write_target(self, client: httpx.AsyncClient) -> None:
+        response = await client.get("health", timeout=3)
+        try:
+            health = response.json() if response.is_success else None
+        except ValueError:
+            health = None
+        if (not isinstance(health, dict) or health.get("application") != SERVICE_NAME
+                or health.get("api_version") != SERVICE_API_VERSION):
+            raise ToolError("当前运行的 Lite 版本无法校验写入目标。请完成现有工作后重启 Lite，再修改或执行。")
+        if self.expected_store is not None and health.get("data_store") != self.expected_store:
+            raise ToolError("当前 Lite 的数据目录与插件配置不同，请核对端口和数据目录。")
+
 
 def asset_info(asset: Payload) -> Payload:
     return {key: asset[key] for key in ("id", "name", "revision", "updated_at")}
@@ -74,7 +108,8 @@ def asset_info(asset: Payload) -> Payload:
 
 def api_info(asset: Payload) -> Payload:
     request = asset["request"]
-    return {**asset_info(asset), "group": asset["group"], "method": request["method"], "path": request["path"]}
+    return {**asset_info(asset), "group": asset["group"], "method": request["method"],
+            "path": masked_url(request["path"], api_auth_key(asset))}
 
 
 def workflow_info(asset: Payload) -> Payload:
@@ -118,12 +153,26 @@ def run_summary(run: Payload) -> Payload:
     return {**run, "nodes": nodes}
 
 
-def create_server(port: int) -> FastMCP:
-    api = LiteClient(port)
-    server = FastMCP("FlowTest-Lite", instructions=(
-        "管理本机 FlowTest-Lite 保存的接口和流程。查找资源后使用其 ID 操作，更新需要最新 revision。"
+def create_server(port: int, *, auto_start: bool = False) -> FastMCP:
+    api = LiteClient(port, auto_start)
+    server = FastMCP(SERVICE_NAME, log_level="WARNING", instructions=(
+        "管理本机 FlowTest-Lite 保存的接口和流程。查找资源后使用其 ID 操作，更新和删除需要最新 revision。"
+        "用户要求打开工作台时调用 workbench_open 并将 open_browser 设为 true。"
         "运行流程返回 run ID，用 workflow_run_get 查状态，按 node_id 读取实际请求、响应和断言。"
     ))
+
+    @server.tool(annotations=OPEN)
+    async def workbench_open(page: Literal["apis", "flows"] = "apis", open_browser: bool = True) -> Payload:
+        """启动或复用 Lite 工作台，返回本地页面地址。open_browser=true 时在默认浏览器打开。"""
+        await api.ready()
+        url = f"{api.origin}/{page}"
+        opened = False
+        if open_browser:
+            try:
+                opened = await asyncio.to_thread(webbrowser.open, url, new=2)
+            except (webbrowser.Error, OSError):
+                pass
+        return {"url": url, "opened": opened}
 
     @server.tool(annotations=READ)
     async def api_list(query: str = "", group: str | None = None, offset: Offset = 0, limit: Limit = 50) -> Payload:
@@ -136,9 +185,10 @@ def create_server(port: int) -> FastMCP:
         return page(matches, offset, limit)
 
     @server.tool(annotations=READ)
-    async def api_get(api_id: UUID) -> Payload:
-        """读取完整接口定义、提取规则和断言，包含该接口配置的鉴权及请求参数。"""
-        return await api.request("GET", f"assets/api/{api_id}")
+    async def api_get(api_id: UUID, include_sensitive: bool = False) -> Payload:
+        """读取接口定义、提取规则和断言。默认隐藏专用鉴权配置和常见凭据字段，修改时只提交目标字段。"""
+        asset = await api.request("GET", f"assets/api/{api_id}")
+        return asset if include_sensitive else api_definition_view(asset)
 
     @server.tool(annotations=CREATE)
     async def api_create(asset: ApiAsset) -> Payload:
@@ -155,12 +205,12 @@ def create_server(port: int) -> FastMCP:
         body = {**current, **changes}
         if isinstance(changes.get("request"), dict):
             body["request"] = {**current["request"], **changes["request"]}
-        return api_info(await api.request("PUT", path, body=body, revision=revision))
+        return api_info(await api.request("PUT", path, body=body, params={"revision": revision}))
 
     @server.tool(annotations=WRITE)
-    async def api_delete(api_id: UUID) -> Payload:
-        """永久删除一个本地接口。引用此接口的流程再次运行时会报找不到接口。"""
-        await api.request("DELETE", f"assets/api/{api_id}")
+    async def api_delete(api_id: UUID, revision: Revision) -> Payload:
+        """按最新版本删除一个本地接口。引用此接口的流程再次运行时会报找不到接口。"""
+        await api.request("DELETE", f"assets/api/{api_id}", params={"revision": revision})
         return {"id": str(api_id), "deleted": True}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True))
@@ -175,19 +225,30 @@ def create_server(port: int) -> FastMCP:
         return {"items": [api_info(asset) for asset in saved]}
 
     @server.tool(annotations=READ)
-    async def api_preview(api_id: UUID, options: SendOptions | None = None) -> Payload:
-        """解析保存的接口和本次变量，查看实际待发 URL、请求头和请求体，无业务 HTTP 请求发出。"""
-        return await api.request("POST", f"requests/{api_id}/preview", body=(options or SendOptions()).model_dump(mode="json"))
+    async def api_preview(api_id: UUID, options: SendOptions | None = None, include_sensitive: bool = False) -> Payload:
+        """查看待发 URL、请求头和请求体。默认隐藏常见凭据及接口配置的 API Key，无业务 HTTP 请求发出。"""
+        custom = "" if include_sensitive else api_auth_key(await api.request("GET", f"assets/api/{api_id}"))
+        preview = await api.request("POST", f"requests/{api_id}/preview", body=(options or SendOptions()).model_dump(mode="json"))
+        return preview if include_sensitive else http_view(preview, custom)
 
     @server.tool(annotations=EXECUTE)
-    async def api_send(api_id: UUID, options: SendOptions | None = None,
+    async def api_send(api_id: UUID, options: SendOptions | None = None, include_sensitive: bool = False,
                        detail: Literal["response", "summary", "full"] = "response") -> Payload:
-        """发送保存的 HTTP 接口，返回响应、提取值和断言。full 另附实际请求。summary 省略请求和响应体、响应头。"""
+        """发送保存的接口，返回响应、提取和断言。full 另附实际请求，默认遮蔽常见鉴权值。summary 省略请求、响应体和响应头。"""
+        custom = ""
+        if detail == "full" and not include_sensitive:
+            custom = api_auth_key(await api.request("GET", f"assets/api/{api_id}"))
         result = await api.request("POST", f"requests/{api_id}/send", body=(options or SendOptions()).model_dump(mode="json"))
         if detail != "full":
             del result["request"]
-        if detail == "summary" and result["response"] is not None:
-            result["response"] = {key: value for key, value in result["response"].items() if key not in {"body", "headers"}}
+        elif result["request"] is not None and not include_sensitive:
+            result["request"] = http_view(result["request"], custom)
+        response = result["response"]
+        if response is not None:
+            if detail == "summary":
+                result["response"] = {key: value for key, value in response.items() if key not in {"body", "headers"}}
+            elif not include_sensitive:
+                result["response"] = http_view(response)
         return result
 
     @server.tool(annotations=READ)
@@ -242,12 +303,12 @@ def create_server(port: int) -> FastMCP:
             saved = current["definition"]
             saved["nodes"] = edit_items("节点", saved["nodes"], graph.upsert_nodes, graph.remove_node_ids)
             saved["edges"] = edit_items("连线", saved["edges"], graph.upsert_edges, graph.remove_edge_ids)
-        return workflow_info(await api.request("PUT", path, body=current, revision=revision))
+        return workflow_info(await api.request("PUT", path, body=current, params={"revision": revision}))
 
     @server.tool(annotations=WRITE)
-    async def workflow_delete(workflow_id: UUID) -> Payload:
-        """永久删除一个本地流程。"""
-        await api.request("DELETE", f"assets/workflow/{workflow_id}")
+    async def workflow_delete(workflow_id: UUID, revision: Revision) -> Payload:
+        """按最新版本删除一个本地流程。"""
+        await api.request("DELETE", f"assets/workflow/{workflow_id}", params={"revision": revision})
         return {"id": str(workflow_id), "deleted": True}
 
     @server.tool(annotations=EXECUTE)
@@ -256,31 +317,45 @@ def create_server(port: int) -> FastMCP:
         return await api.request("POST", f"workflows/{workflow_id}/run", body=(options or RunOptions()).model_dump(mode="json"))
 
     @server.tool(annotations=READ)
-    async def workflow_run_get(run_id: UUID, node_id: str | None = None, include_details: bool = False) -> Payload:
-        """查询运行状态。传 node_id 可读取该步的实际请求、响应、输出和断言，也可以显式读取全部详情。"""
-        run = await api.request("GET", f"runs/{run_id}")
+    async def workflow_run_get(run_id: UUID, node_id: str | None = None, include_details: bool = False,
+                               include_sensitive: bool = False) -> Payload:
+        """查询运行状态。传 node_id 可读取该步的请求、响应、输出和断言。全部详情和常见鉴权值均需显式开启。"""
+        params = {"view": "full" if node_id is not None or include_details else "summary"}
+        if node_id is not None:
+            params["node_id"] = node_id
+        run = await api.request("GET", f"runs/{run_id}", params=params)
         if node_id is not None:
             node = next((item for item in run["nodes"] if item["node_id"] == node_id), None)
             if node is None:
                 raise ToolError(f"本次运行还没有节点 {node_id} 的记录（状态 {run['status']}）")
-            return {"id": run["id"], "workflow_id": run["workflow_id"], "status": run["status"], "node": node}
-        return run if include_details else run_summary(run)
+            return {"id": run["id"], "workflow_id": run["workflow_id"], "status": run["status"],
+                    "node": node if include_sensitive else run_node_view(node)}
+        if not include_details:
+            return run_summary(run)
+        return run if include_sensitive else {**run, "nodes": [run_node_view(item) for item in run["nodes"]]}
 
     @server.tool(annotations=WRITE)
     async def workflow_run_cancel(run_id: UUID) -> Payload:
         """请求取消当前运行，随后用 workflow_run_get 查询最终状态。"""
-        return run_summary(await api.request("POST", f"runs/{run_id}/cancel"))
+        return run_summary(await api.request("POST", f"runs/{run_id}/cancel", params={"view": "summary"}))
 
     return server
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="运行 FlowTest-Lite 本地 MCP（stdio）")
-    parser.add_argument("--port", type=int, default=8765, help="本地 FlowTest-Lite Web/API 服务端口")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="本地 FlowTest-Lite Web/API 服务端口")
+    parser.add_argument("--auto-start", action="store_true", help="连接时自动启动或复用本地工作台")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port 必须在 1 到 65535 之间")
-    create_server(args.port).run(transport="stdio")
+    if args.auto_start:
+        try:
+            ensure_service(args.port)
+        except ServiceLaunchError as error:
+            # Keep tool discovery available. Calls will surface the startup failure and can retry it.
+            print(error, file=sys.stderr)
+    create_server(args.port, auto_start=args.auto_start).run(transport="stdio")
 
 
 if __name__ == "__main__":

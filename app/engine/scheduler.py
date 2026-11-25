@@ -209,6 +209,7 @@ class ExecutionContext:
     allow_return: bool = False
     rerun_loop_node_id: str | None = field(default=None, repr=False)
     rerun_input_indices: frozenset[int] = field(default_factory=frozenset, repr=False)
+    active_incoming_edges: dict[str, frozenset[str]] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         self._record_scope(self.workflow_variables, "workflow")
@@ -1357,19 +1358,19 @@ def _schedule_ready(
     on_node_status: NodeStatusCallback | None,
     reservations: dict[str, _AttemptReservation],
 ) -> None:
-    capacity = definition.settings.concurrency - len(active)
-    if capacity <= 0:
-        return
-    ready = [
-        node
-        for node_id, node in nodes.items()
-        if statuses[node_id] is NodeStatus.PENDING
-        and _edges_are_ready(
-            [_edge_state(edge, statuses, records, context) for edge in incoming[node_id]]
+    for node_id, node in nodes.items():
+        if len(active) >= definition.settings.concurrency:
+            break
+        if statuses[node_id] is not NodeStatus.PENDING:
+            continue
+        edges = incoming[node_id]
+        states = [_edge_state(edge, statuses, records, context) for edge in edges]
+        if not _edges_are_ready(states):
+            continue
+        context.active_incoming_edges[node_id] = frozenset(
+            edge.id for edge, state in zip(edges, states, strict=True) if state is _EdgeState.ACTIVE
         )
-    ]
-    for node in ready[:capacity]:
-        statuses[node.id] = NodeStatus.RUNNING
+        statuses[node_id] = NodeStatus.RUNNING
         task: asyncio.Task[NodeRunRecord] = asyncio.create_task(
             runner(
                 node,
@@ -1382,7 +1383,7 @@ def _schedule_ready(
                 reservations,
             )
         )
-        active[task] = node.id
+        active[task] = node_id
 
 
 def _edge_state(

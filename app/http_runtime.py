@@ -4,6 +4,7 @@ import re
 from base64 import b64encode
 from dataclasses import dataclass
 from hashlib import sha256
+from math import isfinite
 from time import perf_counter
 from typing import cast
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -21,6 +22,8 @@ from app.models import ApiAsset, CommonSettings, Environment
 from app.storage import Store
 
 MAX_BODY_BYTES = 10 * 1024 * 1024
+MAX_RESPONSE_JSON_DEPTH = 100
+INVALID_UNICODE = re.compile(r"[\ud800-\udfff]")
 
 
 class RequestError(ValueError):
@@ -301,6 +304,30 @@ def _response_body(response: httpx.Response) -> JsonValue:
     if not response.content:
         return None
     try:
-        return cast(JsonValue, response.json())
-    except ValueError:
+        body = cast(JsonValue, response.json(parse_float=_finite_number, parse_constant=_finite_number))
+        _validate_response_json(body)
+        return body
+    except (ValueError, RecursionError):
         return response.text
+
+
+def _finite_number(literal: str) -> float:
+    value = float(literal)
+    if not isfinite(value):
+        raise ValueError("响应包含无法表示的 JSON 数值")
+    return value
+
+
+def _validate_response_json(value: JsonValue, depth: int = 0) -> None:
+    if depth > MAX_RESPONSE_JSON_DEPTH:
+        raise ValueError("响应 JSON 嵌套过深")
+    if isinstance(value, str) and INVALID_UNICODE.search(value):
+        raise ValueError("响应包含无法表示的 Unicode 字符")
+    if isinstance(value, list):
+        for item in value:
+            _validate_response_json(item, depth + 1)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if INVALID_UNICODE.search(key):
+                raise ValueError("响应包含无法表示的 Unicode 属性名")
+            _validate_response_json(item, depth + 1)

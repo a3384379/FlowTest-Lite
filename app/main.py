@@ -1,9 +1,7 @@
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 from time import perf_counter
 from typing import Literal
 from uuid import UUID, uuid4
@@ -26,12 +24,16 @@ from app.models import (
     ApiAsset, ApiGroupName, CommonSettings, Environment, ImportOptions, MoveApis,
     RunOptions, SendOptions, WorkflowAsset,
 )
+from app.service_launcher import (
+    FRONTEND_DIST, SERVICE_API_VERSION, SERVICE_NAME, data_directory, data_store_id, frontend_ready,
+)
 from app.storage import EditConflict, MissingAsset, Store
 from app.workflow_runtime import WorkflowPlan, validate_definition
 
 AssetKind = Literal["api", "workflow", "environment"]
 ASSET_MODELS = {"api": ApiAsset, "workflow": WorkflowAsset, "environment": Environment}
-DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+DIST = FRONTEND_DIST
+ASSETS_MOUNTED = (DIST / "assets").is_dir()
 
 
 @dataclass(slots=True)
@@ -43,17 +45,26 @@ class RunState:
     nodes: dict[str, dict] = field(default_factory=dict)
     error: str | None = None
 
-    def payload(self) -> dict:
+    def payload(self, *, view: Literal["full", "summary"] = "full", node_id: str | None = None) -> dict:
+        if node_id is None:
+            nodes = list(self.nodes.values())
+        else:
+            node = self.nodes.get(node_id)
+            if node is None:
+                raise MissingAsset(f"本次运行没有节点 {node_id} 的记录（状态 {self.status}）")
+            nodes = [node]
+        if view == "summary":
+            nodes = [{key: value for key, value in node.items() if key != "result"} for node in nodes]
         return {
             "id": self.id, "workflow_id": self.workflow_id, "status": self.status,
-            "nodes": list(self.nodes.values()), "error": self.error,
+            "nodes": nodes, "error": self.error,
         }
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    directory = Path(os.environ.get("FLOWTEST_DATA_DIR", Path.home() / ".flowtest-lite"))
-    app.state.store = Store(directory / "library.sqlite3")
+    app.state.store = Store(data_directory() / "library.sqlite3")
+    app.state.data_store_id = data_store_id(app.state.store.path)
     app.state.runs = {}
     app.state.tasks = set()
     try:
@@ -66,7 +77,7 @@ async def lifespan(app: FastAPI):
             await asyncio.gather(*app.state.tasks, return_exceptions=True)
 
 
-app = FastAPI(title="FlowTest-Lite", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title=SERVICE_NAME, version="0.1.0", lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
 
 
@@ -116,6 +127,16 @@ def store_of(request: Request) -> Store:
     return request.app.state.store
 
 
+@app.get("/api/health", include_in_schema=False)
+def health(request: Request) -> dict:
+    return {
+        "application": SERVICE_NAME,
+        "api_version": SERVICE_API_VERSION,
+        "data_store": request.app.state.data_store_id,
+        "web_ready": ASSETS_MOUNTED and frontend_ready(),
+    }
+
+
 def validated(kind: AssetKind, value: dict):
     model = ASSET_MODELS[kind].model_validate(value)
     if isinstance(model, WorkflowAsset):
@@ -146,8 +167,8 @@ def update_asset(
 
 
 @app.delete("/api/assets/{kind}/{key}", status_code=204)
-def delete_asset(kind: AssetKind, key: UUID, request: Request):
-    store_of(request).delete(kind, str(key))
+def delete_asset(kind: AssetKind, key: UUID, request: Request, revision: int | None = Query(default=None, ge=1)):
+    store_of(request).delete(kind, str(key), revision=revision)
 
 
 @app.get("/api/groups")
@@ -312,16 +333,19 @@ async def start_run(key: UUID, options: RunOptions, request: Request):
 
 
 @app.get("/api/runs/{key}")
-async def get_run(key: UUID, request: Request):
-    return require_run(key, request).payload()
+async def get_run(
+    key: UUID, request: Request, view: Literal["full", "summary"] = "full",
+    node_id: str | None = Query(default=None, min_length=1, max_length=128),
+):
+    return require_run(key, request).payload(view=view, node_id=node_id)
 
 
 @app.post("/api/runs/{key}/cancel")
-async def cancel_run(key: UUID, request: Request):
+async def cancel_run(key: UUID, request: Request, view: Literal["full", "summary"] = "full"):
     run = require_run(key, request)
     if run.status == "running":
         run.token.cancel()
-    return run.payload()
+    return run.payload(view=view)
 
 
 def require_run(key: UUID, request: Request) -> RunState:
@@ -331,7 +355,7 @@ def require_run(key: UUID, request: Request) -> RunState:
     return run
 
 
-if (DIST / "assets").is_dir():
+if ASSETS_MOUNTED:
     app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
 
 

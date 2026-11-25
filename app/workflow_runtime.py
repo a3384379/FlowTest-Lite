@@ -14,7 +14,7 @@ from pydantic import JsonValue
 from app.domain.assertions import compare_values
 from app.engine.contracts import (
     CONTROL_CONFIG_MODELS, ApiNodeConfig, InlineControlBody, MappingTargetLocation, NodeStatus,
-    NodeType, RetryCategory, WorkflowDefinition, WorkflowNode, WorkflowPhase,
+    NodeType, RetryCategory, WorkflowDefinition, WorkflowEdge, WorkflowNode, WorkflowPhase,
     control_bodies, parse_control_config, parse_node_config,
 )
 from app.engine.control_nodes import execute_control_node
@@ -123,10 +123,10 @@ class WorkflowNodeExecutor:
     def __init__(self, plan: WorkflowPlan, client: httpx.AsyncClient) -> None:
         self.plan = plan
         self.client = client
-        grouped = {}
+        self.mapped_edges: dict[str, list[WorkflowEdge]] = {}
         for edge in (*plan.definition.edges, *(e for r in plan.definition.regions for e in r.edges)):
-            grouped.setdefault(edge.target, []).extend(edge.mappings)
-        self.mappings = grouped
+            if edge.mappings:
+                self.mapped_edges.setdefault(edge.target, []).append(edge)
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -159,7 +159,14 @@ class WorkflowNodeExecutor:
         config = self.plan.configs[node.id]
         asset = self.plan.requests[node.id]
         try:
-            mappings = resolve_field_mappings(self.mappings.get(node.id, ()), context)
+            active_edges = context.active_incoming_edges.get(node.id)
+            applicable_edges = (
+                edge for edge in self.mapped_edges.get(node.id, ())
+                if active_edges is None or edge.id in active_edges
+            )
+            mappings = resolve_field_mappings(
+                (mapping for edge in applicable_edges for mapping in edge.mappings), context,
+            )
             bound = {item.key: item.value for item in mappings if item.location is MappingTargetLocation.VARIABLE}
             request = prepare_request(
                 asset, self.plan.common, self.plan.environment,

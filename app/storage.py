@@ -116,11 +116,19 @@ class Store:
                 """, (kind, key, version, now, data))
         return StoredAsset(key, version, now, json.loads(data))
 
-    def delete(self, kind: str, key: str) -> None:
+    def delete(self, kind: str, key: str, *, revision: int | None = None) -> None:
         with self.connect() as db:
-            deleted = db.execute("DELETE FROM assets WHERE kind=? AND id=?", (kind, key))
-            if not deleted.rowcount:
-                raise MissingAsset("记录不存在")
+            deleted = db.execute(
+                "DELETE FROM assets WHERE kind=? AND id=? AND (? IS NULL OR revision=?)",
+                (kind, key, revision, revision),
+            )
+            if deleted.rowcount:
+                return
+            if revision is not None and db.execute(
+                "SELECT 1 FROM assets WHERE kind=? AND id=?", (kind, key),
+            ).fetchone() is not None:
+                raise EditConflict("记录已有更新，请重新加载后删除")
+            raise MissingAsset("记录不存在")
 
     def groups(self) -> list[str]:
         with self.connect() as db:
