@@ -37,15 +37,15 @@ function Workspace() {
   const context = { environment, selectEnvironment }
   return (
     <div className="app-shell">
-      <nav className="app-rail" aria-label="主导航">
-        <NavLink to="/apis" aria-label="接口管理"><ApiOutlined /><span>接口</span></NavLink>
-        <NavLink to="/flows" aria-label="流程编排"><ApartmentOutlined /><span>编排</span></NavLink>
-      </nav>
       <header className="app-header">
-        <NavLink to="/apis" className="app-brand" aria-label="FlowTest-Lite 首页">
-          <span className="app-brand-mark"><ApiOutlined /></span>
+        <NavLink to="/apis" className="app-brand" aria-label="FlowTest Lite 首页">
+          <span className="app-brand-mark" aria-hidden="true"><ApiOutlined /></span>
           <strong>FlowTest<span className="app-brand-edition"> Lite</span></strong>
         </NavLink>
+        <nav className="app-navigation" aria-label="主导航">
+          <NavLink to="/apis"><ApiOutlined /><span>接口</span></NavLink>
+          <NavLink to="/flows"><ApartmentOutlined /><span>流程</span></NavLink>
+        </nav>
         <EnvironmentToolbar {...context} />
       </header>
       <main className="app-main">

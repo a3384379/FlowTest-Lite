@@ -9,6 +9,7 @@ import {
   InputNumber,
   Popconfirm,
   Switch,
+  Tooltip,
   Typography,
 } from 'antd'
 import { useState } from 'react'
@@ -29,9 +30,9 @@ export default function WorkflowSettingsEditor(props: SettingsProps) {
   }
   return (
     <>
-      <Button aria-label="流程设置" icon={<SettingOutlined />} onClick={() => void show()}>
-        流程设置
-      </Button>
+      <Tooltip title="流程设置">
+        <Button type="text" size="small" aria-label="流程设置" icon={<SettingOutlined />} onClick={() => void show()} />
+      </Tooltip>
       <Drawer
         title={props.historical ? '流程设置 · 冻结快照' : '流程设置'}
         size={440}

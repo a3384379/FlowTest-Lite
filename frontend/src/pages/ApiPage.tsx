@@ -1,4 +1,4 @@
-import { DownloadOutlined, EditOutlined, ImportOutlined, MoreOutlined, PaperClipOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons'
+import { DownloadOutlined, EditOutlined, ImportOutlined, MoreOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons'
 import { useState, useSyncExternalStore } from 'react'
 import { Alert, App, Button, Checkbox, Drawer, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Upload } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -143,22 +143,15 @@ export default function ApiPage({ environment }: { environment?: string }) {
   }
   return (
     <>
-      <div className="page-bar">
-        <h1>接口管理</h1>
-        <Space wrap size={8}>
-          <Button icon={<PaperClipOutlined />} onClick={() => setFilesOpen(true)}>请求附件</Button>
-          <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入接口</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => create()}>新建接口</Button>
-        </Space>
-      </div>
-      <AssetTabs label="已打开接口" active={selected?.id} onSelect={choose} entries={apis.map((api) => ({
-        id: api.id, name: api.name, icon: <HttpMethodBadge method={api.request.method} />, dirty: drafts.apis.has(api.id),
-      }))} />
       {catalog.isError && <Alert type="error" title={apiErrorMessage(catalog.error)} />}
-      <ApiWorkspace preferenceKey="flowtest-lite:api-layout"
-        directory={<ApiDirectory apis={apis} selected={selected?.id} loading={catalog.isPending}
-          onChoose={choose} onCreate={create} onRefresh={refresh} />}
-        workbench={(renderPanels) => (
+      <ApiWorkspace preferenceKey="flowtest-lite:api-layout" resourceId={selected?.id}
+        tabs={<AssetTabs label="已打开接口" active={selected?.id} onSelect={choose} entries={apis.map((api) => ({
+          id: api.id, name: api.name, icon: <HttpMethodBadge method={api.request.method} />, dirty: drafts.apis.has(api.id),
+        }))} />}
+        directory={(showRequest) => <ApiDirectory apis={apis} selected={selected?.id} loading={catalog.isPending}
+          onChoose={(id) => { choose(id); showRequest() }} onCreate={create} onRefresh={refresh}
+          onImport={() => setImportOpen(true)} onFiles={() => setFilesOpen(true)} />}
+        workbench={(renderPanels, showResponse) => (
           <APIWorkbench
             key={selected?.id}
             detail={selected ? apiDetail(selected) : undefined}
@@ -167,6 +160,10 @@ export default function ApiPage({ environment }: { environment?: string }) {
             previewing={preview.isPending}
             artifacts={fileList.data}
             renderPanels={renderPanels}
+            emptyActions={<Space>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => create()}>新建接口</Button>
+              <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入接口</Button>
+            </Space>}
             response={<InterfaceResult key={selected?.id} history={history.data ?? []} configured={selected?.request.assertions ?? []} sending={send.isPending && send.variables === selected?.id} />}
             onPreview={() => selected ? preview.mutateAsync(selected.id) : Promise.resolve(null)}
             onSave={async ({ base_version, ...request }) => {
@@ -179,7 +176,7 @@ export default function ApiPage({ environment }: { environment?: string }) {
             }}
             requestActions={selected && (
               <Button type="primary" icon={<PlayCircleOutlined />} loading={send.isPending && send.variables === selected.id}
-                onClick={() => send.mutate(selected.id)}>发送请求</Button>
+                onClick={() => { showResponse(); send.mutate(selected.id) }}>发送请求</Button>
             )}
             actions={selected && (
               <Dropdown trigger={['click']} menu={{ items: [

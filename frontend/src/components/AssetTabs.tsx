@@ -3,8 +3,8 @@ import { useEffect, useState, type ReactNode } from 'react'
 
 type Entry = { id: string; name: string; icon?: ReactNode; dirty?: boolean }
 
-export default function AssetTabs({ entries, active, onSelect, label }: {
-  entries: Entry[]; active?: string; onSelect: (id: string) => void; label: string
+export default function AssetTabs({ entries, active, onSelect, label, hideSingle = false }: {
+  entries: Entry[]; active?: string; onSelect: (id: string) => void; label: string; hideSingle?: boolean
 }) {
   const [opened, setOpened] = useState<string[]>([])
   useEffect(() => {
@@ -12,7 +12,7 @@ export default function AssetTabs({ entries, active, onSelect, label }: {
   }, [active])
   const tabs = (active && !opened.includes(active) ? [...opened, active] : opened)
     .flatMap((id) => entries.find((entry) => entry.id === id) ?? [])
-  if (!tabs.length) return null
+  if (!tabs.length || (hideSingle && tabs.length === 1)) return null
   function close(id: string, index: number) {
     const neighbor = tabs[index + 1] ?? tabs[index - 1]
     if (id === active && neighbor) onSelect(neighbor.id)

@@ -1,4 +1,4 @@
-import { EditOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, InboxOutlined, PlusOutlined, SwapOutlined } from '@ant-design/icons'
+import { EditOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, ImportOutlined, InboxOutlined, PaperClipOutlined, PlusOutlined, SwapOutlined } from '@ant-design/icons'
 import { Alert, App, AutoComplete, Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Space, Spin, Tooltip } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
@@ -8,10 +8,12 @@ export function HttpMethodBadge({ method }: { method: string }) {
   return <span className="http-method" data-method={method}>{method}</span>
 }
 
-export default function ApiDirectory({ apis, selected, loading, onChoose, onCreate, onRefresh }: {
+export default function ApiDirectory({ apis, selected, loading, onChoose, onCreate, onImport, onFiles, onRefresh }: {
   apis: ApiAsset[]; selected?: string; loading: boolean
   onChoose: (id: string) => void
   onCreate: (group: string) => void
+  onImport: () => void
+  onFiles: () => void
   onRefresh: () => Promise<void>
 }) {
   const [group, setGroup] = useState<string | null>(null)
@@ -77,12 +79,16 @@ export default function ApiDirectory({ apis, selected, loading, onChoose, onCrea
   return (
     <section className="api-directory" aria-label="接口目录">
       <header className="directory-heading">
-        <strong>接口集合 <small>{apis.length}</small></strong>
-        <Space size={2}>
-          <Tooltip title="新建分组"><Button type="text" size="small" icon={<FolderAddOutlined />} aria-label="新建分组" onClick={() => open('create')} /></Tooltip>
-          <Tooltip title="新建接口"><Button type="text" size="small" icon={<PlusOutlined />} aria-label="新建接口" onClick={() => onCreate(group ?? '')} /></Tooltip>
-        </Space>
+        <h1>接口集合 <small>{apis.length}</small></h1>
+        <Tooltip title="新建分组"><Button type="text" size="small" icon={<FolderAddOutlined />} aria-label="新建分组" onClick={() => open('create')} /></Tooltip>
       </header>
+      <div className="directory-actions">
+        <Button icon={<PlusOutlined />} onClick={() => onCreate(group ?? '')}>新建接口</Button>
+        <Space size={2}>
+          <Tooltip title="导入接口"><Button type="text" icon={<ImportOutlined />} aria-label="导入接口" onClick={onImport} /></Tooltip>
+          <Tooltip title="请求附件"><Button type="text" icon={<PaperClipOutlined />} aria-label="请求附件" onClick={onFiles} /></Tooltip>
+        </Space>
+      </div>
       <div className="directory-filters">
         <Input.Search placeholder="搜索名称、路径或说明" allowClear aria-label="搜索接口" value={search} onChange={(event) => setSearch(event.target.value)} />
         <Select aria-label="接口方法筛选" placeholder="全部方法" allowClear value={method} onChange={setMethod} options={httpMethods.map((value) => ({ value }))} />

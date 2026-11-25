@@ -1,4 +1,5 @@
-import { Button, Segmented, Space } from 'antd'
+import { LayoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from '@ant-design/icons'
+import { Button, Dropdown, Segmented, Tooltip } from 'antd'
 import {
   useEffect,
   useRef,
@@ -48,32 +49,23 @@ function readPreferences(key: string): Preferences {
 
 export default function ApiWorkspace({
   preferenceKey,
+  resourceId,
+  tabs,
   directory,
   workbench,
 }: {
   preferenceKey: string
-  directory: ReactNode
-  workbench: (renderPanels: (request: ReactNode, response: ReactNode) => ReactNode) => ReactNode
+  resourceId?: string
+  tabs: ReactNode
+  directory: (showRequest: () => void) => ReactNode
+  workbench: (renderPanels: (request: ReactNode, response: ReactNode) => ReactNode, showResponse: () => void) => ReactNode
 }) {
   const [preferences, setPreferences] = useState(() => readPreferences(preferenceKey))
   const [storageError, setStorageError] = useState(false)
-  const [mobilePanel, setMobilePanel] = useState<MobilePanel>('request')
-  const root = useRef<HTMLDivElement>(null)
-  const [height, setHeight] = useState<number>()
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>(resourceId ? 'request' : 'directory')
   useEffect(() => {
-    const resize = () => {
-      if (root.current)
-        setHeight(Math.max(280, window.innerHeight - root.current.getBoundingClientRect().top - 16))
-    }
-    resize()
-    const observer = new ResizeObserver(resize)
-    if (root.current?.parentElement) observer.observe(root.current.parentElement)
-    window.addEventListener('resize', resize)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', resize)
-    }
-  }, [])
+    if (resourceId) setMobilePanel('request')
+  }, [resourceId])
   function update(patch: Partial<Preferences>, persist = true) {
     const next = { ...preferences, ...patch }
     setPreferences(next)
@@ -113,58 +105,51 @@ export default function ApiWorkspace({
     )
   }
   return (
-    <>
-      <Space wrap size={6} className="api-layout-toolbar" aria-label="接口工作区布局">
-        <Button
-          size="small"
-          aria-expanded={!preferences.directoryCollapsed}
-          onClick={() => update({ directoryCollapsed: !preferences.directoryCollapsed })}
-        >
-          {preferences.directoryCollapsed ? '展开目录' : '收起目录'}
-        </Button>
-        <Segmented
-          size="small"
-          aria-label="请求响应布局"
-          value={preferences.layout}
+    <section className="request-workspace" aria-label="接口工作台">
+      <div className="request-workspace-top">
+        <div className="request-open-tabs">{tabs}</div>
+        <div className="request-layout-controls" aria-label="接口工作区布局">
+          <Tooltip title={preferences.directoryCollapsed ? '展开目录' : '收起目录'}>
+            <Button
+              type="text" aria-label={preferences.directoryCollapsed ? '展开目录' : '收起目录'}
+              aria-expanded={!preferences.directoryCollapsed}
+              icon={preferences.directoryCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              onClick={() => update({ directoryCollapsed: !preferences.directoryCollapsed })}
+            />
+          </Tooltip>
+          <Dropdown trigger={['click']} menu={{
+            selectable: true,
+            selectedKeys: [preferences.layout],
+            items: [
+              { key: 'side', label: '左右并排' },
+              { key: 'stacked', label: '上下分栏' },
+              { type: 'divider' },
+              { key: 'response', label: preferences.responseCollapsed ? '展开响应' : '收起响应' },
+            ],
+            onClick: ({ key }) => {
+              if (key === 'response') update({ responseCollapsed: !preferences.responseCollapsed })
+              if (key === 'side' || key === 'stacked') update({ layout: key })
+            },
+          }}>
+            <Button type="text" icon={<LayoutOutlined />} aria-label="布局设置">布局</Button>
+          </Dropdown>
+        </div>
+        {storageError && <small role="status">布局偏好未保存</small>}
+      </div>
+      <div className="api-mobile-panel-tabs">
+        <Segmented aria-label="接口工作区面板" block value={mobilePanel} onChange={setMobilePanel}
           options={[
-            { value: 'side', label: '左右并排' },
-            { value: 'stacked', label: '上下分栏' },
-          ]}
-          onChange={(layout) => update({ layout: layout as Preferences['layout'] })}
-        />
-        <Button
-          size="small"
-          aria-expanded={!preferences.responseCollapsed}
-          onClick={() => update({ responseCollapsed: !preferences.responseCollapsed })}
-        >
-          {preferences.responseCollapsed ? '展开响应' : '收起响应'}
-        </Button>
-        {storageError && <span role="status">布局偏好未保存，当前仍可调整</span>}
-      </Space>
-      <div className="api-mobile-panel-tabs" role="group" aria-label="接口工作区面板">
-        {(['directory', 'request', 'response'] as const).map((panel, index) => (
-          <Button
-            key={panel}
-            type={mobilePanel === panel ? 'primary' : 'default'}
-            aria-pressed={mobilePanel === panel}
-            onClick={() => setMobilePanel(panel)}
-          >
-            {['接口目录', '请求编辑', '响应验证'][index]}
-          </Button>
-        ))}
+            { value: 'directory', label: '接口目录' },
+            { value: 'request', label: '请求' },
+            { value: 'response', label: '响应' },
+          ]} />
       </div>
       <div
-        ref={root}
         className={`api-workspace api-resizable-workspace${preferences.directoryCollapsed ? ' directory-collapsed' : ''}`}
         data-mobile-panel={mobilePanel}
-        style={
-          {
-            height,
-            ...{ '--api-directory-width': `${preferences.directoryWidth}px` },
-          } as CSSProperties
-        }
+        style={{ '--api-directory-width': `${preferences.directoryWidth}px` } as CSSProperties}
       >
-        <div className="api-layout-directory">{directory}</div>
+        <div className="api-layout-directory">{directory(() => setMobilePanel('request'))}</div>
         <ResizeHandle
           label="调整接口目录宽度"
           value={preferences.directoryWidth}
@@ -177,10 +162,10 @@ export default function ApiWorkspace({
           onCommit={(value) => update({ directoryWidth: value })}
         />
         <div className="api-workbench-pane">
-          {workbench(renderPanels)}
+          {workbench(renderPanels, () => setMobilePanel('response'))}
         </div>
       </div>
-    </>
+    </section>
   )
 }
 

@@ -106,7 +106,7 @@ function controlSummary(
 
 function apiSummary(config: Record<string, unknown>, apis: ApiDefinition[]): string {
   const api = apis.find((item) => item.id === config.api_definition_id)
-  return api ? `${api.name} · ${api.method} ${api.path}` : '请选择本地接口'
+  return api ? `${api.method} ${api.path}` : '请选择本地接口'
 }
 
 function controlIntent(

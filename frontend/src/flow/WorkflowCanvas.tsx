@@ -57,6 +57,7 @@ type CanvasEdge = Edge<{
 
 const nodeTypes = { workflowNode: WorkflowNodeCard }
 const edgeTypes = { workflowEdge: WorkflowCanvasEdge }
+const fitOptions = { padding: 0.13, maxZoom: 1.12 }
 const labels: Record<WorkflowNode['type'], string> = {
   api: '接口', start: '开始', end: '结束', extract: '提取变量', assert: '断言',
   condition: '条件分支', delay: '等待', capability: '控制块',
@@ -75,11 +76,12 @@ type Props = {
   run?: FlowRun
   view: 'edit' | 'run'
   runDefinition?: WorkflowDefinition
+  modeControls: ReactNode
   onChange: (definition: WorkflowDefinition) => void
 }
 
 export default function WorkflowCanvas({
-  definition, workflowId, apis, artifacts, environment, run, view, runDefinition, onChange,
+  definition, workflowId, apis, artifacts, environment, run, view, runDefinition, modeControls, onChange,
 }: Props) {
   const editing = view === 'edit'
   const editor = useWorkflowEditor(definition, editing, onChange)
@@ -99,7 +101,7 @@ export default function WorkflowCanvas({
     let frame = 0
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => void canvas.current?.fitView({ padding: 0.22, maxZoom: 1.12 }))
+      frame = requestAnimationFrame(() => void canvas.current?.fitView(fitOptions))
     })
     observer.observe(canvasHost.current)
     return () => {
@@ -130,7 +132,7 @@ export default function WorkflowCanvas({
     setFocus(false)
   }
   function fitCanvas() {
-    requestAnimationFrame(() => void canvas.current?.fitView({ padding: 0.22, duration: 160, maxZoom: 1.12 }))
+    requestAnimationFrame(() => void canvas.current?.fitView({ ...fitOptions, duration: 160 }))
   }
   function locateNode(id: string) {
     inspect('node', id)
@@ -209,7 +211,7 @@ export default function WorkflowCanvas({
     return {
       id: node.id, type: 'workflowNode',
       initialWidth: 196,
-      initialHeight: view.regions.length ? 112 + 50 * view.regions.length : 115,
+      initialHeight: (editing ? 80 : 109) + 50 * view.regions.length,
       position: editor.positions.get(node.id) ?? node.position,
       selected: activeNodeId === node.id,
       data: {
@@ -257,27 +259,30 @@ export default function WorkflowCanvas({
     <div className="workflow-editor lite-flow-editor" data-view={view} data-focus={focus}>
       {guard.dialog}
       <div className="canvas-toolbar">
-        <Space wrap size={6}>
+        <div className="canvas-mode-controls">{modeControls}</div>
+        <Space wrap size={5} className="canvas-tools" aria-label="画布工具">
           {editing && <>
-            <Button type={libraryOpen && !focus ? 'primary' : 'default'} icon={<AppstoreOutlined />}
-              aria-expanded={libraryOpen && !focus} onClick={() => { setFocus(false); setLibraryOpen(focus || !libraryOpen) }}>节点库</Button>
-            <Tooltip title="撤销（Ctrl/⌘ + Z）"><Button aria-label="撤销" icon={<UndoOutlined />} disabled={!editor.past.length} onClick={() => mutate(editor.undo)} /></Tooltip>
-            <Tooltip title="重做（Ctrl/⌘ + Shift + Z）"><Button aria-label="重做" icon={<RedoOutlined />} disabled={!editor.future.length} onClick={() => mutate(editor.redo)} /></Tooltip>
-            <Button icon={<ApartmentOutlined />} onClick={() => mutate(() => {
-              editor.commit(autoLayoutWorkflow(editor.latest.current.definition))
-              fitCanvas()
-            })}>自动布局</Button>
+            <Button type="text" size="small" icon={<AppstoreOutlined />}
+              className="canvas-tools-toggle" aria-label="节点库" aria-pressed={libraryOpen && !focus}
+              onClick={() => { setFocus(false); setLibraryOpen(focus || !libraryOpen) }}>节点库</Button>
+            <Tooltip title="撤销（Ctrl/⌘ + Z）"><Button type="text" size="small" aria-label="撤销" icon={<UndoOutlined />} disabled={!editor.past.length} onClick={() => mutate(editor.undo)} /></Tooltip>
+            <Tooltip title="重做（Ctrl/⌘ + Shift + Z）"><Button type="text" size="small" aria-label="重做" icon={<RedoOutlined />} disabled={!editor.future.length} onClick={() => mutate(editor.redo)} /></Tooltip>
+            <Tooltip title="自动布局">
+              <Button type="text" size="small" aria-label="自动布局" icon={<ApartmentOutlined />} onClick={() => mutate(() => {
+                editor.commit(autoLayoutWorkflow(editor.latest.current.definition))
+                fitCanvas()
+              })} />
+            </Tooltip>
           </>}
-          <Button icon={<AimOutlined />} onClick={fitCanvas}>适应画布</Button>
-        </Space>
-        <Space wrap size={8}>
+          <Tooltip title="适应画布"><Button type="text" size="small" aria-label="适应画布" icon={<AimOutlined />} onClick={fitCanvas} /></Tooltip>
           {editing && <>
             <Checkbox checked={relations} onChange={(event) => setRelations(event.target.checked)}>数据引用</Checkbox>
             <WorkflowSettingsEditor definition={current} editable historical={false}
               beforeOpen={guard.request} onChange={(next) => editor.commit(next)} />
-            <Button icon={focus ? <FullscreenExitOutlined /> : <FullscreenOutlined />} onClick={() => mutate(() => setFocus(!focus))}>
-              {focus ? '退出专注' : '专注模式'}
-            </Button>
+            <Tooltip title={focus ? '退出专注' : '专注模式'}>
+              <Button type="text" size="small" aria-label={focus ? '退出专注' : '专注模式'} aria-pressed={focus}
+                icon={focus ? <FullscreenExitOutlined /> : <FullscreenOutlined />} onClick={() => mutate(() => setFocus(!focus))} />
+            </Tooltip>
           </>}
         </Space>
       </div>
@@ -287,14 +292,15 @@ export default function WorkflowCanvas({
         <div className="lite-flow-center">
           <div ref={canvasHost} className="workflow-canvas lite-canvas" aria-label="流程画布" tabIndex={0}
             onKeyDown={hotkeys} onDragOver={dragOver} onDrop={drop}>
-            {editing && (
-              <div className="canvas-diagnostic" data-valid={!diagnostics.length} title={diagnostics[0]?.message}>
-                {editor.message ?? diagnostics[0]?.message ?? '流程结构检查通过'}
+            {editing && (editor.message || diagnostics[0]) && (
+              <div className="canvas-diagnostic" data-valid={!diagnostics.length} role="status"
+                title={editor.message ?? diagnostics[0]?.message}>
+                {editor.message ?? diagnostics[0]?.message}
               </div>
             )}
             <ReactFlow<CanvasNode, CanvasEdge>
               nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
-              fitView fitViewOptions={{ padding: 0.22, maxZoom: 1.12 }} onInit={(instance) => { canvas.current = instance }}
+              fitView fitViewOptions={fitOptions} onInit={(instance) => { canvas.current = instance }}
               minZoom={0.15} maxZoom={1.7} deleteKeyCode={null}
               nodesDraggable={editing} nodesConnectable={editing} edgesReconnectable={editing}
               onConnect={(value) => { if (editing) editor.accept(connectGraphNodes(editor.latest.current.definition, connection(value))) }}
@@ -310,7 +316,7 @@ export default function WorkflowCanvas({
                 }
               }}
             >
-              <Background gap={20} size={1.15} color="#cbdcf0" />
+              <Background gap={22} size={1.15} color="var(--ft-grid-dot)" />
               <Controls position="bottom-right" showInteractive={editing} />
               <MiniMap position="bottom-left" style={{ width: 180, height: 112 }} pannable zoomable />
             </ReactFlow>
@@ -393,7 +399,7 @@ function WorkflowNodeCard({ data, selected }: NodeProps<CanvasNode>) {
           {data.summary}
         </div>
         <NodeRegionPreview regions={data.regions ?? []} />
-        <NodeFooter data={data} />
+        {data.inspectionMode === 'execution' && <NodeFooter data={data} />}
         {!terminal &&
           (data.nodeType === 'condition' ? (
             <>

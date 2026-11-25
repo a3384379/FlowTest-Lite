@@ -43,6 +43,7 @@ type APIWorkbenchProps = {
   requestActions?: ReactNode
   actions?: ReactNode
   response: ReactNode
+  emptyActions?: ReactNode
   renderPanels: (request: ReactNode, response: ReactNode) => ReactNode
 }
 
@@ -61,10 +62,10 @@ export type WorkbenchFields = BodyEditorFields & {
 export default function APIWorkbench(props: APIWorkbenchProps) {
   if (!props.detail) {
     return props.renderPanels(
-      <section className="api-panel api-request-panel">
-        <header className="pane-heading"><h2>请求配置</h2></header>
-        <Empty className="workspace-empty" image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={props.loading ? '正在读取接口' : '从目录选择或新建接口'} />
+      <section className="api-panel api-request-panel request-empty" aria-label="请求">
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={props.loading ? '正在读取接口' : '尚未保存接口'}>
+          {!props.loading && props.emptyActions}
+        </Empty>
       </section>,
       props.response,
     )
@@ -93,10 +94,12 @@ function LoadedAPIWorkbench(props: APIWorkbenchProps & { detail: ApiDetail }) {
         <div className="api-request-strip">
           <div className="api-request-identity">
             <h2>{props.detail.definition.name}</h2>
-            {draft.dirty && <span className="workbench-state" data-dirty>未保存 · 发送使用已保存配置</span>}
-            <Space size={4} className="request-tools">
+            <Space size={5} className="request-tools">
+              {draft.dirty && <span className="workbench-state" data-dirty>未保存</span>}
               <Button type="text" size="small" icon={<EyeOutlined />} loading={props.previewing}
                 onClick={() => void props.onPreview().then(setPreview).catch(() => undefined)}>预览</Button>
+              <Button type="text" size="small" icon={<SaveOutlined />} loading={props.saving}
+                disabled={!draft.dirty} htmlType="submit">保存接口</Button>
               {props.actions}
             </Space>
           </div>
@@ -109,13 +112,12 @@ function LoadedAPIWorkbench(props: APIWorkbenchProps & { detail: ApiDetail }) {
               <Input aria-label="请求路径" placeholder="/api/orders/{{order_id}}" />
             </Form.Item>
             {props.requestActions}
-            <Button icon={<SaveOutlined />} loading={props.saving} htmlType="submit">保存接口</Button>
           </div>
+          {draft.dirty && <div className="request-draft-note">发送与预览使用已保存的配置</div>}
           {draft.error && <Alert type="error" showIcon title={draft.error} />}
         </div>
         {props.renderPanels(
           <section className="api-panel api-request-panel" aria-label="请求配置">
-            <header className="pane-heading"><h2>请求配置</h2></header>
             <Tabs className="workbench-request-tabs" size="small" tabBarGutter={16}
               items={requestTabs.map((tab) => ({ ...tab, forceRender: true }))} />
           </section>,

@@ -1,6 +1,6 @@
-import { FolderOpenOutlined, MoreOutlined, PlayCircleOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
+import { ApartmentOutlined, DownOutlined, MoreOutlined, PlayCircleOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
 import { useState, useSyncExternalStore } from 'react'
-import { Alert, App, Button, Drawer, Dropdown, Empty, Form, Input, Modal, Segmented, Select, Space } from 'antd'
+import { Alert, App, Button, Dropdown, Empty, Form, Input, Modal, Popover, Segmented, Select, Space } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import AssetTabs from '../components/AssetTabs'
@@ -179,88 +179,97 @@ export default function FlowsPage({ environment }: { environment?: string }) {
     finally { setCancelling(false) }
   }
 
+  const visibleFlows = workflows.filter((item) => item.name.toLowerCase().includes(filter.trim().toLowerCase()))
   return (
     <>
-      <div className="page-bar">
-        <h1>流程编排</h1>
-        <Space wrap size={8}>
-          <Button icon={<FolderOpenOutlined />} onClick={() => setCatalogOpen(true)}>流程列表</Button>
-          <Button icon={<PlusOutlined />} type={current ? 'default' : 'primary'} onClick={() => setCreating(true)}>新建流程</Button>
-        </Space>
-      </div>
-      <AssetTabs label="已打开流程" active={current?.id} onSelect={select}
-        entries={workflows.map((item) => ({ id: item.id, name: item.name, dirty: Boolean(work[item.id]) }))} />
       {workflowList.error && <Alert type="error" title={apiErrorMessage(workflowList.error)} />}
       {apiList.error && <Alert type="error" title={apiErrorMessage(apiList.error)} />}
       {files.error && <Alert type="error" title={apiErrorMessage(files.error)} />}
-      <div className="flow-workspace">
+      <section className="flow-workspace" aria-label="流程工作台">
+        <header className="flow-workbench-header">
+          <div className="flow-heading">
+            <span className="flow-heading-icon" aria-hidden="true"><ApartmentOutlined /></span>
+            <h1 className="flow-picker-title">
+              <Popover placement="bottomLeft" trigger="click" open={catalogOpen} onOpenChange={setCatalogOpen}
+                title="选择流程" content={
+                  <div className="flow-picker">
+                    <Input.Search aria-label="搜索流程" allowClear placeholder="搜索流程名称" value={filter}
+                      onChange={(event) => setFilter(event.target.value)} />
+                    <div className="flow-catalog">
+                      {visibleFlows.map((item) => (
+                        <button key={item.id} type="button" className="catalog-item" aria-current={current?.id === item.id}
+                          onClick={() => select(item.id)}>
+                          <strong>{item.name}</strong>
+                          <small>{work[item.id] ? '未保存' : `${item.definition.nodes.length} 个节点`}</small>
+                        </button>
+                      ))}
+                      {!visibleFlows.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无匹配流程" />}
+                    </div>
+                  </div>
+                }>
+                <button className="flow-picker-trigger" type="button" aria-expanded={catalogOpen}
+                  aria-label={current ? `切换流程，当前 ${current.name}` : '选择流程'} title={current?.name}>
+                  <span>{current?.name ?? '选择流程'}</span><DownOutlined />
+                </button>
+              </Popover>
+            </h1>
+            {(dirty || nodeDirty) && <span className="workbench-state" data-dirty>未保存</span>}
+            {active && <Status status="running" />}
+          </div>
+          <Space wrap size={7} className="flow-workbench-actions">
+            <Button icon={<PlusOutlined />} type={current ? 'text' : 'primary'} onClick={() => setCreating(true)}>新建流程</Button>
+            {current && <>
+              <Button icon={<SaveOutlined />} loading={savingId === current.id} disabled={!dirty || nodeDirty}
+                onClick={() => void save(current)}>保存流程</Button>
+              {active ? <Button danger loading={cancelling} onClick={() => void cancel()}>取消运行</Button> : (
+                <Button type="primary" icon={<PlayCircleOutlined />} disabled={dirty || nodeDirty}
+                  loading={startingId === current.id} onClick={() => void start(current)}>运行流程</Button>
+              )}
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'inputs', label: '名称与流程输入' },
+                { key: 'run-inputs', label: '使用临时输入运行', disabled: active || dirty || nodeDirty },
+                { key: 'copy', label: '复制流程', disabled: Boolean(savingId) || dirty || nodeDirty },
+                { key: 'delete', label: '删除流程', danger: true, disabled: active },
+              ], onClick: ({ key }) => {
+                if (key === 'inputs') setInputsOpen(true)
+                if (key === 'run-inputs') setRunInputsOpen(true)
+                if (key === 'copy') void copy(current)
+                if (key === 'delete') modal.confirm({
+                  title: '删除这个流程？', okText: '删除流程',
+                  okButtonProps: { danger: true }, onOk: () => remove(current),
+                })
+              } }}>
+                <Button type="text" icon={<MoreOutlined />} aria-label="工作流更多操作" />
+              </Dropdown>
+            </>}
+          </Space>
+        </header>
+        <AssetTabs label="已打开流程" active={current?.id} onSelect={select} hideSingle
+          entries={workflows.map((item) => ({ id: item.id, name: item.name, dirty: Boolean(work[item.id]) }))} />
+        {run.error && view === 'run' && <Alert type="error" title={apiErrorMessage(run.error)} />}
         {current ? (
-          <>
-            <header className="flow-workbench-header">
-              <div className="flow-heading">
-                <h2>{current.name}</h2>
-                {(dirty || nodeDirty) && <span className="workbench-state" data-dirty>未保存</span>}
-                {active && <Status status="running" />}
-              </div>
-              <div className="flow-workbench-actions">
-                <Segmented aria-label="工作流视图模式" value={view} onChange={setView}
-                  options={[{ value: 'edit', label: '编排' }, { value: 'run', label: '运行视图', disabled: !runId || nodeDirty }]} />
-                <Space wrap size={8}>
-                  {view === 'run' && recentRuns.length > 1 && <Select aria-label="会话执行记录" value={runId} disabled={active}
+          <div className={savingId === current.id ? 'flow-canvas-frame flow-saving' : 'flow-canvas-frame'}>
+            <WorkflowCanvas
+              key={current.id} workflowId={current.id} definition={current.definition}
+              apis={(apiList.data ?? []).map(apiDefinition)} artifacts={files.data ?? []}
+              environment={environment} run={run.data} view={view} runDefinition={runDefinition}
+              modeControls={
+                <Space wrap size={6}>
+                  <Segmented size="small" aria-label="工作流视图模式" value={view} onChange={setView}
+                    options={[{ value: 'edit', label: '编排' }, { value: 'run', label: '运行结果', disabled: !runId || nodeDirty }]} />
+                  {view === 'run' && recentRuns.length > 1 && <Select size="small" aria-label="会话执行记录" value={runId} disabled={active}
                     onChange={(id) => setSelectedRun(id === latestId ? undefined : { flowId: current.id, id })}
                     options={recentRuns.map((item, index) => ({
                       value: item.id,
                       label: `${index === 0 ? '最近执行' : '执行记录'} · ${new Date(item.startedAt).toLocaleTimeString()}`,
                     }))} />}
-                  <Button icon={<SaveOutlined />} loading={savingId === current.id}
-                    disabled={!dirty || nodeDirty} onClick={() => void save(current)}>保存流程</Button>
-                  {active ? <Button danger loading={cancelling} onClick={() => void cancel()}>取消运行</Button> : (
-                    <Button type="primary" icon={<PlayCircleOutlined />} disabled={dirty || nodeDirty}
-                      loading={startingId === current.id} onClick={() => void start(current)}>运行流程</Button>
-                  )}
-                  <Dropdown trigger={['click']} menu={{ items: [
-                    { key: 'inputs', label: '名称与流程输入' },
-                    { key: 'run-inputs', label: '使用临时输入运行', disabled: active || dirty || nodeDirty },
-                    { key: 'copy', label: '复制流程', disabled: Boolean(savingId) || dirty || nodeDirty },
-                    { key: 'delete', label: '删除流程', danger: true, disabled: active },
-                  ], onClick: ({ key }) => {
-                    if (key === 'inputs') setInputsOpen(true)
-                    if (key === 'run-inputs') setRunInputsOpen(true)
-                    if (key === 'copy') void copy(current)
-                    if (key === 'delete') modal.confirm({
-                      title: '删除这个流程？', okText: '删除流程',
-                      okButtonProps: { danger: true }, onOk: () => remove(current),
-                    })
-                  } }}>
-                    <Button icon={<MoreOutlined />} aria-label="工作流更多操作" />
-                  </Dropdown>
                 </Space>
-              </div>
-            </header>
-            {run.error && view === 'run' && <Alert type="error" title={apiErrorMessage(run.error)} />}
-            <div className={savingId === current.id ? 'flow-canvas-frame flow-saving' : 'flow-canvas-frame'}>
-              <WorkflowCanvas
-                key={current.id} workflowId={current.id} definition={current.definition}
-                apis={(apiList.data ?? []).map(apiDefinition)} artifacts={files.data ?? []}
-                environment={environment} run={run.data} view={view} runDefinition={runDefinition}
-                onChange={(definition) => change({ ...current, definition })} />
-            </div>
-          </>
-        ) : <Empty className="workspace-empty" description={workflowList.isPending ? '正在读取流程' : '选择或新建一个流程'} />}
-      </div>
-      <Drawer title="流程列表" placement="left" size={330} open={catalogOpen} onClose={() => setCatalogOpen(false)}
-        extra={<Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setCreating(true)}>新建</Button>}>
-        <Input.Search aria-label="搜索流程" allowClear placeholder="搜索名称" value={filter} onChange={(event) => setFilter(event.target.value)} />
-        <div className="flow-catalog">
-          {workflows.filter((item) => item.name.toLowerCase().includes(filter.trim().toLowerCase())).map((item) => (
-            <button key={item.id} type="button" className="catalog-item" aria-current={current?.id === item.id} onClick={() => select(item.id)}>
-              <strong>{item.name}</strong>
-              <small>{work[item.id] ? '未保存' : `${item.definition.nodes.length} 个节点`}</small>
-            </button>
-          ))}
-          {!workflows.some((item) => item.name.toLowerCase().includes(filter.trim().toLowerCase())) && <Empty description="暂无匹配流程" />}
-        </div>
-      </Drawer>
+              }
+              onChange={(definition) => change({ ...current, definition })} />
+          </div>
+        ) : <Empty className="workspace-empty" image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={workflowList.isPending ? '正在读取流程' : '尚未创建流程'} />}
+      </section>
       {creating && <CreateFlowDialog onCreate={create} onClose={() => setCreating(false)} busy={savingId === 'new'} />}
       {current && runInputsOpen && <TemporaryInputs key={current.id} workflow={current} busy={startingId === current.id}
         onClose={() => setRunInputsOpen(false)} onRun={(values) => start(current, values)} />}

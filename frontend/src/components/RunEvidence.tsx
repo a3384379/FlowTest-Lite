@@ -48,9 +48,9 @@ export function InterfaceResult({ history, configured, sending }: {
   const response = result?.response
   const checks = result?.assertions ?? []
   return (
-    <section className="api-panel api-response-panel" aria-label="响应与验证">
+    <section className="api-panel api-response-panel" aria-label="响应与验证" data-complete={Boolean(result)}>
       <header className="pane-heading">
-        <h2>响应与验证</h2>
+        <h2>响应</h2>
         {sending ? <Space size={6}><Spin size="small" />发送中</Space> : response && (
           <Space size={8} wrap className="response-summary">
             <Tag color={response.status_code < 400 ? 'green' : 'red'}>HTTP {response.status_code}</Tag>
