@@ -44,7 +44,14 @@ uv run --locked python -m app
 uv run --locked --extra mcp python -m app.codex_plugin
 ```
 
-在 Codex 新会话中选择 **FlowTest-Lite**，然后说「打开 FlowTest-Lite 本地工作台」。Codex 连接插件的 `stdio` 服务时，插件会通过本机 uv 按锁文件准备 MCP 依赖，再启动或复用 Lite。`workbench_open` 可在浏览器打开接口页或流程页。服务可在会话结束后继续供浏览器使用。启动错误可在数据目录的 `launch-<端口>.log` 中查看，默认端口为 `8765`。
+在支持全屏 MCP App 的 Codex 桌面版，从左侧打开 **FlowTest-Lite**。如果本次升级后还未显示，重新打开 Codex 桌面版以刷新插件入口。也可在已启用插件的会话中说「在 Codex 中打开 FlowTest-Lite 工作台」。
+
+- **接口**可搜索已保存的接口，选择运行环境，预览请求或实际发送，并查看响应、提取和断言。
+- **流程**可搜索已保存的流程，查看节点连线，执行或取消运行，并检查失败节点的预期值和实际值。
+
+顶部的 **在浏览器打开编辑器** 会打开当前条目，供新建、导入、编辑请求或编排画布。内嵌页面通过 MCP 调用本机 Lite，和浏览器工作台使用同一份 SQLite 数据。
+
+Codex 连接插件的 `stdio` 服务时，插件会通过本机 uv 按锁文件准备 MCP 依赖，再启动或复用 Lite。服务可在会话结束后继续供浏览器使用。启动错误可在数据目录的 `launch-<端口>.log` 中查看，默认端口为 `8765`。
 
 仓库搬迁后，在新位置准备好运行环境，再执行安装命令。如果原位置仍保有另一个仓库副本，安装器会提示来源冲突。使用 `--port` 和 `--data-dir` 可指定实例。安装产物默认保存在 `~/.flowtest-lite/codex-marketplace`，同一命令可更新插件。缺少健康接口的旧版实例无法报告实际 SQLite 路径。插件配置为默认数据目录时可以打开该工作台和读取数据。完成已有执行后可重启到新版，以校验数据目录并启用写入和执行。见 [Codex 插件打包文档](https://developers.openai.com/plugins/build/plugins)。
 

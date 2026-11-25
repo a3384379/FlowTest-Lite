@@ -1,6 +1,6 @@
 {
   "name": "flowtest-lite",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "使用本机 FlowTest-Lite 管理 HTTP 接口、编排业务流程和查看执行结果。",
   "mcpServers": "./.mcp.json",
   "requires_local_executor": true,
@@ -10,6 +10,6 @@
     "developerName": "a3384379",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/a3384379/FlowTest-Lite",
-    "defaultPrompt": ["打开 FlowTest-Lite 本地工作台", "列出 FlowTest-Lite 的接口", "查看 FlowTest-Lite 的流程"]
+    "defaultPrompt": ["在 Codex 中打开 FlowTest-Lite 工作台", "列出 FlowTest-Lite 的接口", "查看 FlowTest-Lite 的流程"]
   }
 }

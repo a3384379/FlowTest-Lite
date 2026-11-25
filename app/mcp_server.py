@@ -19,6 +19,7 @@ from app.mcp_views import (
     api_auth_key, api_definition_view, http_view, masked_assertions, masked_fields, masked_parameters, masked_url,
     run_node_view, workflow_overrides,
 )
+from app.mcp_workbench import WORKBENCH_NAME, WORKBENCH_TOOL_META, register_workbench_resource
 from app.models import ApiAsset, ImportOptions, Model, RunOptions, SendOptions, WorkflowAsset
 from app.service_launcher import (
     DEFAULT_PORT, SERVICE_API_VERSION, SERVICE_NAME, ServiceLaunchError, data_directory, data_store_id, ensure_service,
@@ -165,7 +166,7 @@ def run_summary(run: Payload, *, include_sensitive: bool = False) -> Payload:
     return {**run, "nodes": nodes}
 
 
-def create_server(port: int, *, auto_start: bool = False) -> FastMCP:
+def create_server(port: int, *, auto_start: bool = False, codex_app: bool = False) -> FastMCP:
     api = LiteClient(port, auto_start)
     preview_key = secrets.token_bytes(32)
 
@@ -175,15 +176,28 @@ def create_server(port: int, *, auto_start: bool = False) -> FastMCP:
 
     server = FastMCP(SERVICE_NAME, log_level="WARNING", instructions=(
         "管理本机 FlowTest-Lite 保存的接口和流程。查找资源后使用其 ID 操作，更新和删除需要最新 revision。"
-        "用户要求打开工作台时调用 workbench_open 并将 open_browser 设为 true。"
+        + ("用户要求在 Codex 中打开工作台时调用 workbench_view。"
+           if codex_app else "")
+        + "用户要求在浏览器打开工作台时调用 workbench_open 并将 open_browser 设为 true。"
         "运行流程返回 run ID，用 workflow_run_get 查状态，按 node_id 读取实际请求、响应和断言。"
     ))
 
+    if codex_app:
+        register_workbench_resource(server)
+
+        @server.tool(title=WORKBENCH_NAME, annotations=READ, meta=WORKBENCH_TOOL_META)
+        async def workbench_view() -> Payload:
+            """在 Codex 内打开 FlowTest-Lite 接口和流程工作台。"""
+            return {"opened": True}
+
     @server.tool(annotations=OPEN)
-    async def workbench_open(page: Literal["apis", "flows"] = "apis", open_browser: bool = True) -> Payload:
-        """启动或复用 Lite 工作台，返回本地页面地址。open_browser=true 时在默认浏览器打开。"""
+    async def workbench_open(page: Literal["apis", "flows"] = "apis", open_browser: bool = True,
+                             asset_id: UUID | None = None) -> Payload:
+        """启动或复用 Lite。可用 asset_id 直达接口或流程，open_browser=true 时打开默认浏览器。"""
         await api.ready()
         url = f"{api.origin}/{page}"
+        if asset_id is not None:
+            url += f"?id={asset_id}"
         opened = False
         if open_browser:
             try:
@@ -397,6 +411,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="运行 FlowTest-Lite 本地 MCP（stdio）")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="本地 FlowTest-Lite Web/API 服务端口")
     parser.add_argument("--auto-start", action="store_true", help="连接时自动启动或复用本地工作台")
+    parser.add_argument("--codex-app", action="store_true", help="提供 Codex 全屏工作台")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port 必须在 1 到 65535 之间")
@@ -406,7 +421,7 @@ def main() -> None:
         except ServiceLaunchError as error:
             # Keep tool discovery available. Calls will surface the startup failure and can retry it.
             print(error, file=sys.stderr)
-    create_server(args.port, auto_start=args.auto_start).run(transport="stdio")
+    create_server(args.port, auto_start=args.auto_start, codex_app=args.codex_app).run(transport="stdio")
 
 
 if __name__ == "__main__":

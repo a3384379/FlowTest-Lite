@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from app.mcp_workbench import WORKBENCH_SCRIPT
 from app.service_launcher import APP_ROOT, DEFAULT_PORT, data_directory, frontend_ready
 
 PLUGIN = "flowtest-lite"
@@ -54,7 +55,7 @@ def package_plugin(root: Path, port: int, data_dir: Path) -> None:
     mcp = {"mcpServers": {PLUGIN: {
         "command": str(Path(uv).absolute()),
         "args": ["run", "--directory", str(APP_ROOT), "--locked", "--extra", "mcp",
-                 "python", "-m", "app.mcp_server", "--auto-start", "--port", str(port)],
+                 "python", "-m", "app.mcp_server", "--auto-start", "--codex-app", "--port", str(port)],
         "cwd": ".",
         "env": {"FLOWTEST_DATA_DIR": str(data_dir)},
         "startup_timeout_sec": 60,
@@ -120,7 +121,7 @@ def main() -> None:
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port 必须在 1 到 65535 之间")
-    if not frontend_ready():
+    if not frontend_ready() or not WORKBENCH_SCRIPT.is_file():
         parser.error("请先执行 npm --prefix frontend ci 和 npm --prefix frontend run build")
     root = args.marketplace_dir.expanduser().resolve()
     try:
