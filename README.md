@@ -44,17 +44,17 @@ uv run --locked python -m app
 uv run --locked --extra mcp python -m app.codex_plugin
 ```
 
-在 Codex 新会话中选择 **FlowTest-Lite**，然后说「打开 FlowTest-Lite 本地工作台」。Codex 首次连接插件的 `stdio` 服务时，Lite 会启动或复用已有实例。`workbench_open` 可在浏览器打开接口页或流程页。服务可在会话结束后继续供浏览器使用。启动错误可在数据目录的 `launch-<端口>.log` 中查看，默认端口为 `8765`。
+在 Codex 新会话中选择 **FlowTest-Lite**，然后说「打开 FlowTest-Lite 本地工作台」。Codex 连接插件的 `stdio` 服务时，插件会通过本机 uv 按锁文件准备 MCP 依赖，再启动或复用 Lite。`workbench_open` 可在浏览器打开接口页或流程页。服务可在会话结束后继续供浏览器使用。启动错误可在数据目录的 `launch-<端口>.log` 中查看，默认端口为 `8765`。
 
-插件使用本机的当前仓库和 Python 环境。更换仓库位置、端口或数据目录后，重新执行安装命令。使用 `--port` 和 `--data-dir` 可连接自定义实例。安装产物默认保存在 `~/.flowtest-lite/codex-marketplace`，同一命令可更新插件。正在运行的旧版实例可供打开工作台和读取数据，完成已有执行后可重启到新版以启用写入、执行和服务端运行摘要。见 [Codex 插件打包文档](https://developers.openai.com/plugins/build/plugins)。
+仓库搬迁后，在新位置准备好运行环境，再执行安装命令。如果原位置仍保有另一个仓库副本，安装器会提示来源冲突。使用 `--port` 和 `--data-dir` 可指定实例。安装产物默认保存在 `~/.flowtest-lite/codex-marketplace`，同一命令可更新插件。缺少健康接口的旧版实例无法报告实际 SQLite 路径。插件配置为默认数据目录时可以打开该工作台和读取数据。完成已有执行后可重启到新版，以校验数据目录并启用写入和执行。见 [Codex 插件打包文档](https://developers.openai.com/plugins/build/plugins)。
 
 ### MCP 工具
 
-- **接口管理**用 `api_list`、`api_get`、`api_create`、`api_update`、`api_delete`。`api_update` 只修改 `changes` 提供的字段。导入用 `api_import_preview` 和 `api_import_save`，调试用 `api_preview` 和 `api_send`。
+- **接口管理**用 `api_list`、`api_get`、`api_create`、`api_update`、`api_delete`。`api_update` 只修改 `changes` 提供的字段。用 `api_import_preview` 预览后，可把原 `source`、返回的 `preview_id` 和从零开始的候选下标 `indices` 传给 `api_import_save`，保留原始鉴权配置。来源是 URL 时会重新读取。内容变化或 MCP 服务重启后需再次预览。调试用 `api_preview` 和 `api_send`。
 - **流程编排**用 `workflow_list`、`workflow_get`、`workflow_create`、`workflow_update`、`workflow_delete`。可替换完整的 `definition`，或通过 `graph` 在一次保存中增删改主画布节点和连线。删除节点时同时列出需要删除的连线。内联区域和运行设置可用完整定义修改，结构可用 `workflow_validate` 提前检查。
 - **流程运行**用 `workflow_run` 启动，`workflow_run_get` 查看进度和结果，`workflow_run_cancel` 取消。用 `environment_list` 查环境 ID。读取运行结果时指定 `node_id` 可查看该步实际请求、响应、提取和断言。保存的数据在页面刷新后可见。
 
-更新和删除接口或流程时传入最近读取的 `revision`。默认遮蔽专用鉴权配置和常见凭据字段。确需查看原值时，相关读取工具可显式传 `include_sensitive: true`。请求体、响应体、变量和断言可能包含业务数据。查看大量响应时可用 `api_send` 的 `detail: "summary"`，流程运行默认先返回状态摘要。
+更新和删除接口或流程时传入最近读取的 `revision`。MCP 默认遮蔽专用鉴权配置、常见凭据名和接口指定的 API Key。运行快照使用执行当时的字段名。旧快照缺少该信息时会隐藏全部请求头、响应头和查询参数值。确需查看原值时，相关工具可显式传 `include_sensitive: true`。正文、自由文本和自定义表达式的结果可能包含业务敏感信息。更新时尽量只提交需要修改的字段，勿将脱敏视图当作完整定义保存。查看大量响应时可用 `api_send` 的 `detail: "summary"`，流程运行默认先返回状态摘要。
 
 其他 MCP 客户端也可在仓库目录运行 `uv run --locked --extra mcp python -m app.mcp_server --auto-start`。可追加与 Web 服务一致的 `--port`。
 

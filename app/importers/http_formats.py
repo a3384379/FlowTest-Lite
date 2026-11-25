@@ -241,7 +241,7 @@ def _sequence(value: object, message: str) -> Sequence[object]:
 def _header(value: str) -> tuple[str, str]:
     name, separator, header_value = value.partition(":")
     if not separator or not name.strip():
-        raise HttpFormatError(f"Header 格式无效: {value}")
+        raise HttpFormatError("Header 格式无效，请填写请求头名称、冒号和值")
     return name.strip(), header_value.strip()
 
 

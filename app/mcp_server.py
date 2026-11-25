@@ -1,5 +1,8 @@
 import argparse
 import asyncio
+import hmac
+import json
+import secrets
 import sys
 import webbrowser
 from typing import Annotated, Any, Literal
@@ -12,7 +15,10 @@ from mcp.types import ToolAnnotations
 from pydantic import Field, JsonValue
 
 from app.engine.contracts import WorkflowDefinition, WorkflowEdge, WorkflowNode
-from app.mcp_views import api_auth_key, api_definition_view, http_view, masked_url, run_node_view
+from app.mcp_views import (
+    api_auth_key, api_definition_view, http_view, masked_assertions, masked_fields, masked_parameters, masked_url,
+    run_node_view, workflow_overrides,
+)
 from app.models import ApiAsset, ImportOptions, Model, RunOptions, SendOptions, WorkflowAsset
 from app.service_launcher import (
     DEFAULT_PORT, SERVICE_API_VERSION, SERVICE_NAME, ServiceLaunchError, data_directory, data_store_id, ensure_service,
@@ -22,6 +28,8 @@ from app.workflow_runtime import validate_definition
 Revision = Annotated[int, Field(ge=1, description="最近一次读取到的 revision")]
 Offset = Annotated[int, Field(ge=0)]
 Limit = Annotated[int, Field(ge=1, le=200)]
+ImportAssets = Annotated[list[ApiAsset], Field(min_length=1, max_length=1000)]
+ImportIndices = Annotated[list[Annotated[int, Field(ge=0)]], Field(min_length=1, max_length=1000)]
 Payload = dict[str, Any]
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -148,13 +156,23 @@ def starter_definition() -> WorkflowDefinition:
     })
 
 
-def run_summary(run: Payload) -> Payload:
+def run_summary(run: Payload, *, include_sensitive: bool = False) -> Payload:
     nodes = [{key: value for key, value in node.items() if key != "result"} for node in run["nodes"]]
+    if not include_sensitive:
+        for node in nodes:
+            if node.get("error_code") == "HTTP_ASSERTION_FAILED":
+                node["error_message"] = "HTTP 断言失败，可按 node_id 查看断言明细"
     return {**run, "nodes": nodes}
 
 
 def create_server(port: int, *, auto_start: bool = False) -> FastMCP:
     api = LiteClient(port, auto_start)
+    preview_key = secrets.token_bytes(32)
+
+    def import_preview_id(candidates: list[Payload]) -> str:
+        content = json.dumps(candidates, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        return hmac.digest(preview_key, content.encode("ascii"), "sha256").hex()
+
     server = FastMCP(SERVICE_NAME, log_level="WARNING", instructions=(
         "管理本机 FlowTest-Lite 保存的接口和流程。查找资源后使用其 ID 操作，更新和删除需要最新 revision。"
         "用户要求打开工作台时调用 workbench_open 并将 open_browser 设为 true。"
@@ -214,31 +232,49 @@ def create_server(port: int, *, auto_start: bool = False) -> FastMCP:
         return {"id": str(api_id), "deleted": True}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True))
-    async def api_import_preview(source: ImportOptions) -> Payload:
-        """预览 cURL、OpenAPI、Postman、HAR 或 Bruno 导入。提供 content 或文档 url，返回待选择的接口和诊断。"""
-        return {"candidates": await api.request("POST", "import/preview", body=source.model_dump(mode="json"))}
+    async def api_import_preview(source: ImportOptions, include_sensitive: bool = False) -> Payload:
+        """预览 cURL、OpenAPI、Postman、HAR 或 Bruno。返回候选及 preview_id。按原 source、preview_id 和从 0 起的 indices 保存原始定义。"""
+        candidates = await api.request("POST", "import/preview", body=source.model_dump(mode="json"))
+        preview_id = import_preview_id(candidates)
+        if not include_sensitive:
+            candidates = [{**item, "asset": api_definition_view(item["asset"])} for item in candidates]
+        return {"preview_id": preview_id, "candidates": candidates}
 
-    @server.tool(annotations=CREATE)
-    async def api_import_save(assets: Annotated[list[ApiAsset], Field(min_length=1, max_length=1000)]) -> Payload:
-        """保存导入预览中选中的 asset 对象。也可一次新增多条手工定义的接口。"""
-        saved = await api.request("POST", "import/save", body=[asset.model_dump(mode="json") for asset in assets])
+    @server.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False, openWorldHint=True))
+    async def api_import_save(assets: ImportAssets | None = None, source: ImportOptions | None = None,
+                              preview_id: str | None = None, indices: ImportIndices | None = None) -> Payload:
+        """提供 source、preview_id 及 indices，保存选中接口的完整原值，文档变化需重新预览。也可只传完整 assets 批量新增。"""
+        if assets is not None:
+            if any(item is not None for item in (source, preview_id, indices)):
+                raise ToolError("请单独传完整 assets，或传 source、preview_id 和 indices")
+            definitions = [asset.model_dump(mode="json") for asset in assets]
+        else:
+            if source is None or not preview_id or indices is None:
+                raise ToolError("请选择导入来源 source、preview_id 和候选下标 indices")
+            candidates = await api.request("POST", "import/preview", body=source.model_dump(mode="json"))
+            if not hmac.compare_digest(preview_id.encode(), import_preview_id(candidates).encode()):
+                raise ToolError("导入预览已过期或内容已变化，请重新预览后选择")
+            if len(set(indices)) != len(indices) or max(indices) >= len(candidates):
+                raise ToolError("导入候选下标重复或超出预览范围")
+            definitions = [candidates[index]["asset"] for index in indices]
+        saved = await api.request("POST", "import/save", body=definitions)
         return {"items": [api_info(asset) for asset in saved]}
 
     @server.tool(annotations=READ)
     async def api_preview(api_id: UUID, options: SendOptions | None = None, include_sensitive: bool = False) -> Payload:
         """查看待发 URL、请求头和请求体。默认隐藏常见凭据及接口配置的 API Key，无业务 HTTP 请求发出。"""
-        custom = "" if include_sensitive else api_auth_key(await api.request("GET", f"assets/api/{api_id}"))
         preview = await api.request("POST", f"requests/{api_id}/preview", body=(options or SendOptions()).model_dump(mode="json"))
-        return preview if include_sensitive else http_view(preview, custom)
+        return preview if include_sensitive else http_view(preview, preview.get("auth_key_name"))
 
     @server.tool(annotations=EXECUTE)
     async def api_send(api_id: UUID, options: SendOptions | None = None, include_sensitive: bool = False,
                        detail: Literal["response", "summary", "full"] = "response") -> Payload:
         """发送保存的接口，返回响应、提取和断言。full 另附实际请求，默认遮蔽常见鉴权值。summary 省略请求、响应体和响应头。"""
-        custom = ""
-        if detail == "full" and not include_sensitive:
-            custom = api_auth_key(await api.request("GET", f"assets/api/{api_id}"))
         result = await api.request("POST", f"requests/{api_id}/send", body=(options or SendOptions()).model_dump(mode="json"))
+        custom = (result["request"] or {}).get("auth_key_name")
+        if not include_sensitive:
+            result["extracted"] = masked_fields(result["extracted"], custom)
+            result["assertions"] = masked_assertions(result["assertions"], custom)
         if detail != "full":
             del result["request"]
         elif result["request"] is not None and not include_sensitive:
@@ -248,7 +284,7 @@ def create_server(port: int, *, auto_start: bool = False) -> FastMCP:
             if detail == "summary":
                 result["response"] = {key: value for key, value in response.items() if key not in {"body", "headers"}}
             elif not include_sensitive:
-                result["response"] = http_view(response)
+                result["response"] = http_view(response, custom)
         return result
 
     @server.tool(annotations=READ)
@@ -265,9 +301,24 @@ def create_server(port: int, *, auto_start: bool = False) -> FastMCP:
         return page(matches, offset, limit)
 
     @server.tool(annotations=READ)
-    async def workflow_get(workflow_id: UUID) -> Payload:
-        """读取已保存的流程定义、流程输入和 revision。"""
-        return await api.request("GET", f"assets/workflow/{workflow_id}")
+    async def workflow_get(workflow_id: UUID, include_sensitive: bool = False) -> Payload:
+        """读取流程定义、输入和 revision，默认遮蔽常见凭据和 HTTP 覆盖中的鉴权值。完整替换定义或输入时请使用原值。"""
+        asset = await api.request("GET", f"assets/workflow/{workflow_id}")
+        if include_sensitive:
+            return asset
+        definition = asset["definition"]
+        asset["inputs"] = masked_fields(asset["inputs"])
+        definition["variables"] = masked_fields(definition["variables"])
+        overrides = list(workflow_overrides(definition))
+        if overrides:
+            keys = {item["id"]: api_auth_key(item) for item in await api.request("GET", "assets/api")}
+            for api_id, fields in overrides:
+                custom = keys.get(api_id)
+                if fields.get("headers"):
+                    fields["headers"] = masked_fields(fields["headers"], custom)
+                if fields.get("query_parameters"):
+                    fields["query_parameters"] = masked_parameters(fields["query_parameters"], custom)
+        return asset
 
     @server.tool(annotations=READ)
     async def workflow_validate(definition: WorkflowDefinition) -> Payload:
@@ -331,7 +382,7 @@ def create_server(port: int, *, auto_start: bool = False) -> FastMCP:
             return {"id": run["id"], "workflow_id": run["workflow_id"], "status": run["status"],
                     "node": node if include_sensitive else run_node_view(node)}
         if not include_details:
-            return run_summary(run)
+            return run_summary(run, include_sensitive=include_sensitive)
         return run if include_sensitive else {**run, "nodes": [run_node_view(item) for item in run["nodes"]]}
 
     @server.tool(annotations=WRITE)

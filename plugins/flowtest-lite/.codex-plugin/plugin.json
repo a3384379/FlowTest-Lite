@@ -1,6 +1,6 @@
 {
   "name": "flowtest-lite",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "使用本机 FlowTest-Lite 管理 HTTP 接口、编排业务流程和查看执行结果。",
   "mcpServers": "./.mcp.json",
   "requires_local_executor": true,

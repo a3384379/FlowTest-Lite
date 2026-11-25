@@ -68,6 +68,7 @@ class HttpRequestSnapshot(BaseModel):
     url: str = Field(min_length=1, max_length=4096)
     headers: dict[str, str] = Field(default_factory=dict)
     body: JsonValue = None
+    auth_key_name: str = ""
 
 
 class HttpResponseSnapshot(BaseModel):

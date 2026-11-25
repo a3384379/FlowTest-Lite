@@ -48,6 +48,10 @@ class AuthKind(StrEnum):
     API_KEY = "api_key"
 
 
+def api_key_name(kind: str, config: dict[str, str]) -> str:
+    return config.get("name", "x-api-key") if kind == AuthKind.API_KEY else ""
+
+
 class ExtractionKind(StrEnum):
     JSONPATH = "jsonpath"
     JMESPATH = "jmespath"

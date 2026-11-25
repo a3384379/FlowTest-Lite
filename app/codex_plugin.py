@@ -1,9 +1,7 @@
 import argparse
-import importlib.util
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -37,6 +35,9 @@ def load_json(path: Path) -> dict:
 
 
 def package_plugin(root: Path, port: int, data_dir: Path) -> None:
+    uv = shutil.which("uv")
+    if uv is None:
+        raise RuntimeError("找不到 uv。请将 uv 加入 PATH 后重新安装插件。")
     owner = {"package": PLUGIN_ID, "project": str(APP_ROOT)}
     owner_path = root / PACKAGE_OWNER
     manifest = load_json(APP_ROOT / PLUGIN_PATH / MANIFEST_PATH)
@@ -51,11 +52,12 @@ def package_plugin(root: Path, port: int, data_dir: Path) -> None:
         }],
     }
     mcp = {"mcpServers": {PLUGIN: {
-        "command": str(Path(sys.executable).absolute()),
-        "args": ["-m", "app.mcp_server", "--auto-start", "--port", str(port)],
+        "command": str(Path(uv).absolute()),
+        "args": ["run", "--directory", str(APP_ROOT), "--locked", "--extra", "mcp",
+                 "python", "-m", "app.mcp_server", "--auto-start", "--port", str(port)],
         "cwd": ".",
-        "env": {"PYTHONPATH": str(APP_ROOT), "FLOWTEST_DATA_DIR": str(data_dir)},
-        "startup_timeout_sec": 15,
+        "env": {"FLOWTEST_DATA_DIR": str(data_dir)},
+        "startup_timeout_sec": 60,
     }}}
     files = {
         owner_path: owner,
@@ -67,8 +69,12 @@ def package_plugin(root: Path, port: int, data_dir: Path) -> None:
         raise RuntimeError(f"插件目录包含符号链接，请选择其他目录。{root}")
     root.mkdir(parents=True, mode=0o700, exist_ok=True)
     if owner_path.exists():
-        if load_json(owner_path) != owner:
+        previous = load_json(owner_path)
+        old_project = previous.get("project") if isinstance(previous, dict) else None
+        if not isinstance(old_project, str) or not Path(old_project).is_absolute() or previous.get("package") != PLUGIN_ID:
             raise RuntimeError(f"该插件目录属于不同项目。{root}")
+        if Path(old_project) != APP_ROOT and Path(old_project).exists():
+            raise RuntimeError(f"插件仍属于现有项目目录 {old_project}，请核对使用的仓库。")
     elif any(root.iterdir()):
         raise RuntimeError(f"插件目录已有其他内容，请选择空目录。{root}")
     catalogue = root / MARKETPLACE_PATH
@@ -114,8 +120,6 @@ def main() -> None:
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port 必须在 1 到 65535 之间")
-    if importlib.util.find_spec("mcp") is None:
-        parser.error("请运行 uv run --locked --extra mcp python -m app.codex_plugin")
     if not frontend_ready():
         parser.error("请先执行 npm --prefix frontend ci 和 npm --prefix frontend run build")
     root = args.marketplace_dir.expanduser().resolve()

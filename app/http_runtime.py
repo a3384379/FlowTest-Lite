@@ -13,7 +13,7 @@ import httpx
 from pydantic import JsonValue
 
 from app.domain.api_assets import (
-    TEMPLATE_PATTERN, AuthKind, BodyKind, merge_headers, render_json, render_template,
+    TEMPLATE_PATTERN, AuthKind, BodyKind, api_key_name, merge_headers, render_json, render_template,
 )
 from app.domain.assertions import AssertionSpec, AssertionKind, ResponseSnapshot, evaluate_assertions
 from app.domain.scopes import HeaderScope, ResolvedValue, VariableScope, resolve_variables
@@ -61,6 +61,7 @@ class PreparedRequest:
     headers: dict[str, str]
     body_kind: BodyKind
     body: JsonValue
+    auth_key_name: str = ""
 
 
 def json_text(value: JsonValue) -> str:
@@ -148,7 +149,10 @@ def prepare_request(
     url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query, doseq=True), ""))
     body_kind = overrides.body.kind if overrides.body else request.body_kind
     body = overrides.body.value if overrides.body else request.body
-    return PreparedRequest(request.method.value, url, headers, body_kind, render_json(body, variables))
+    return PreparedRequest(
+        request.method.value, url, headers, body_kind, render_json(body, variables),
+        auth_key_name=api_key_name(request.auth_kind, request.auth_config),
+    )
 
 
 def _remove_cookies(headers: dict[str, str], suppressed: set[str]) -> None:
@@ -222,6 +226,7 @@ def http_snapshot(request: PreparedRequest, response: ResponseContent | None = N
         "url": str(response.request.url) if response is not None else request.url,
         "headers": dict(response.request.headers) if response is not None else request.headers,
         "body": request.body,
+        "auth_key_name": request.auth_key_name,
     }
 
 
@@ -288,7 +293,9 @@ def _apply_auth(
         encoded = b64encode(f"{username}:{password}".encode()).decode()
         headers["authorization"] = f"Basic {encoded}"
         return
-    name = auth_config.get("name", "x-api-key")
+    name = api_key_name(auth_kind, auth_config)
+    if not name.strip():
+        raise RequestError("INVALID_AUTH", "API Key 需要填写字段名称")
     value = render_template(auth_config.get("value", ""), variables)
     location = auth_config.get("in", "header")
     if location == "query":
