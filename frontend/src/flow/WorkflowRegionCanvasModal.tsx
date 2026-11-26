@@ -501,7 +501,7 @@ function MoveButtons({
 
 function regionCanvasKey(region: WorkflowRegion): string {
   return JSON.stringify([
-    region.nodes.map((node) => [node.id, node.name, node.position]),
+    region.nodes.map((node) => [node.id, node.name, node.note, node.position]),
     region.edges.map((edge) => [edge.id, edge.source, edge.target]),
   ])
 }

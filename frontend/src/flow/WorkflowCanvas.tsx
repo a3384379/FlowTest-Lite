@@ -26,7 +26,7 @@ import { useWorkflowEditor } from './editor/use-workflow-editor'
 import { useDraftSession } from '../features/drafts/draft-session'
 import { useNodeSelectionGuard } from './editor/use-node-selection-guard'
 import { addApiNode, addTypedNode, autoLayoutWorkflow, insertNodeOnEdge, pasteNode, workflowNodeSize, type PaletteNodeType } from './workflow-graph'
-import WorkflowNodeIcon from './WorkflowNodeIcon'
+import WorkflowNodeIcon, { NodeNoteIndicator } from './WorkflowNodeIcon'
 import WorkflowNodeLibrary, { NODE_DRAG_FORMAT, nodeChoice, type NodeChoice } from './WorkflowNodeLibrary'
 import WorkflowNodeRelations from './WorkflowNodeRelations'
 import WorkflowRunTimeline from './WorkflowRunTimeline'
@@ -35,6 +35,7 @@ import './workflow-editor.css'
 
 type NodeData = {
   label: string
+  note?: string
   nodeType: WorkflowNode['type']
   typeLabel: string
   control?: string
@@ -225,6 +226,7 @@ export default function WorkflowCanvas({
       data: {
         ...presentation,
         label: node.name,
+        note: node.note,
         nodeType: type,
         typeLabel: controlCapabilityLabel(node.capability_id) ?? labels[type],
         control: node.capability_id?.split('.').at(-1),
@@ -342,7 +344,10 @@ export default function WorkflowCanvas({
               {editing && <Button type="text" size="small" icon={<CloseOutlined />} aria-label="关闭配置" onClick={() => mutate(() => editor.select(null))} />}
             </header>
             <div className="lite-inspector-content">
-              {!editing && execution && <NodeResultView key={execution.node_id} item={execution} />}
+              {!editing && execution && <>
+                <RunNodeNote definition={current} nodeId={execution.node_id} />
+                <NodeResultView key={execution.node_id} item={execution} />
+              </>}
               {editing && selectedNode && (
                 <Tabs key={selectedNode.id} size="small" items={[
                   { key: 'config', label: '配置', forceRender: true, children: (
@@ -383,6 +388,14 @@ export default function WorkflowCanvas({
   )
 }
 
+function RunNodeNote({ definition, nodeId }: { definition: WorkflowDefinition; nodeId: string }) {
+  const node = definition.nodes.find((item) => item.id === nodeId)
+  if (!node?.note?.trim()) return null
+  return <section className="flow-run-node-note" aria-label="节点备注">
+    <strong>节点备注</strong><p>{node.note}</p>
+  </section>
+}
+
 function WorkflowNodeCard({ data, selected }: NodeProps<CanvasNode>) {
   const terminal = data.nodeType === 'end'
   const start = data.nodeType === 'start'
@@ -409,6 +422,7 @@ function WorkflowNodeCard({ data, selected }: NodeProps<CanvasNode>) {
           <strong className="flow-node-name" title={data.label}>
             {data.label}
           </strong>
+          <NodeNoteIndicator note={data.note} />
           {data.inspectionMode === 'execution' && (
             <span className="flow-node-state" title={endpoint?.statusCode ? `HTTP ${endpoint.statusCode}` : undefined}>
               {statusLabel[data.status] ?? data.status}

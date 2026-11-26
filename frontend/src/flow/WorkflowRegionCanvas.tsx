@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { WorkflowRegion } from '../lib/api'
 import { iceColors } from '../theme/ice-theme'
 import { linearRegionPath } from './editor/control-blocks'
+import { NodeNoteIndicator } from './WorkflowNodeIcon'
 
 type Props = {
   region: WorkflowRegion
@@ -28,7 +29,11 @@ function canvasNodes(region: WorkflowRegion, selectedNodeId: string | null): Nod
     type: 'default',
     position: node.position,
     data: {
-      label: `${region.entry_node_id === node.id ? '入口 · ' : ''}${node.name}${region.exit_node_ids.includes(node.id) ? ' · 出口' : ''}`,
+      label: <span>
+        {region.entry_node_id === node.id ? '入口 · ' : ''}{node.name}
+        {region.exit_node_ids.includes(node.id) ? ' · 出口' : ''}
+        <NodeNoteIndicator note={node.note} />
+      </span>,
     },
     ariaLabel: node.name,
     selected: node.id === selectedNodeId,

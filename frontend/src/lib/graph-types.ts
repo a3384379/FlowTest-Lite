@@ -10,6 +10,7 @@ export type WorkflowNode = {
     | 'capability'
     | 'end'
   name: string
+  note?: string
   position: { x: number; y: number }
   config: Record<string, unknown>
   capability_id?: string

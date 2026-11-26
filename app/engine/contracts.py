@@ -16,6 +16,7 @@ from app.domain.api_assets import BodyKind
 from app.domain.assertions import ComparisonOperator
 
 VariableName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.-]*$", max_length=160)]
+NodeNote = Annotated[str, Field(max_length=2000, description="说明节点在流程中的作用")]
 CONTROL_MAX_REGION_DEPTH = 4
 
 
@@ -164,6 +165,7 @@ class WorkflowNode(BaseModel):
     id: str = Field(min_length=1, max_length=128)
     type: NodeType
     name: str = Field(min_length=1, max_length=200)
+    note: NodeNote = ""
     position: Position
     config: dict[str, JsonValue] = Field(default_factory=dict)
     capability_id: str | None = None

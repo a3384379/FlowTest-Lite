@@ -14,7 +14,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field, JsonValue
 
-from app.engine.contracts import WorkflowDefinition, WorkflowEdge, WorkflowNode
+from app.engine.contracts import NodeNote, WorkflowDefinition, WorkflowEdge, WorkflowNode
 from app.mcp_views import (
     api_auth_key, api_definition_view, http_view, masked_assertions, masked_fields, masked_parameters, masked_url,
     run_node_view, workflow_overrides,
@@ -33,6 +33,9 @@ Limit = Annotated[int, Field(ge=1, le=200)]
 ImportAssets = Annotated[list[ApiAsset], Field(min_length=1, max_length=1000)]
 ImportIndices = Annotated[list[Annotated[int, Field(ge=0)]], Field(min_length=1, max_length=1000)]
 ProjectId = Annotated[UUID | None, Field(description="project_list 返回的项目 ID。省略时使用默认项目。")]
+NodeNotes = Annotated[dict[Annotated[str, Field(min_length=1, max_length=128)], NodeNote], Field(
+    min_length=1, max_length=200, description="按节点 ID 修改备注，支持主画布和子画布。空字符串清除备注。",
+)]
 Payload = dict[str, Any]
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -141,7 +144,12 @@ def edit_items(
     label: str, existing: list[Payload], upserts: list[WorkflowNode] | list[WorkflowEdge], removals: list[str],
 ) -> list[Payload]:
     by_id = {item["id"]: item for item in existing}
-    updated = {item.id: item.model_dump(mode="json") for item in upserts}
+    updated = {}
+    for item in upserts:
+        value = item.model_dump(mode="json")
+        if isinstance(item, WorkflowNode) and item.id in by_id and "note" not in item.model_fields_set:
+            value["note"] = by_id[item.id].get("note", "")
+        updated[item.id] = value
     removing = set(removals)
     if len(updated) != len(upserts) or len(removing) != len(removals) or removing.intersection(updated):
         raise ToolError(f"{label}变更含重复 ID 或同时更新和删除的 ID")
@@ -383,13 +391,15 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
         return workflow_info(await api.request("POST", "assets/workflow", body=asset.model_dump(mode="json"), project_id=project_id))
 
     @server.tool(annotations=WRITE)
-    async def workflow_update(workflow_id: UUID, revision: Revision, name: str | None = None,
-                              inputs: dict[str, JsonValue] | None = None,
-                              definition: WorkflowDefinition | None = None, graph: GraphChanges | None = None, project_id: ProjectId = None) -> Payload:
-        """保存流程。可替换完整 definition，或用 graph 按 ID 成组增删改主画布节点和连线。内联区域及流程设置通过 definition 修改。"""
+    async def workflow_update(
+        workflow_id: UUID, revision: Revision, name: str | None = None, inputs: dict[str, JsonValue] | None = None,
+        definition: WorkflowDefinition | None = None, graph: GraphChanges | None = None,
+        project_id: ProjectId = None, node_notes: NodeNotes | None = None,
+    ) -> Payload:
+        """保存流程。node_notes 按 ID 修改主画布和子画布节点备注。也可替换完整 definition，或用 graph 修改主画布节点和连线。"""
         if definition is not None and graph is not None:
             raise ToolError("definition 和 graph 只能指定一个")
-        if all(value is None for value in (name, inputs, definition, graph)):
+        if all(value is None for value in (name, inputs, definition, graph, node_notes)):
             raise ToolError("请提供需要修改的流程内容")
         path = f"assets/workflow/{workflow_id}"
         current = await api.for_update(path, revision, project_id)
@@ -399,10 +409,17 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
             current["inputs"] = inputs
         if definition is not None:
             current["definition"] = definition.model_dump(mode="json")
+        saved = current["definition"]
         if graph is not None:
-            saved = current["definition"]
             saved["nodes"] = edit_items("节点", saved["nodes"], graph.upsert_nodes, graph.remove_node_ids)
             saved["edges"] = edit_items("连线", saved["edges"], graph.upsert_edges, graph.remove_edge_ids)
+        if node_notes is not None:
+            nodes_by_id = {node["id"]: node for scope in [saved, *saved.get("regions", [])] for node in scope["nodes"]}
+            unknown = node_notes.keys() - nodes_by_id.keys()
+            if unknown:
+                raise ToolError(f"找不到要修改备注的节点：{', '.join(sorted(unknown))}")
+            for node_id, note in node_notes.items():
+                nodes_by_id[node_id]["note"] = note
         return workflow_info(await api.request("PUT", path, body=current, params={"revision": revision}, project_id=project_id))
 
     @server.tool(annotations=WRITE)

@@ -36,6 +36,7 @@ uv run --locked python -m app
 - 新建流程后，选择已保存的接口添加到画布。可从节点库搜索、点击添加或拖入画布。可移动节点、重接端口、撤销、重做或整理布局，点选节点和连线在侧栏配置。接口节点在每次运行开始时读取当前保存的接口，可覆盖 Query、Headers 和 Body。
 - 通过连线映射或提取节点传递上游结果。例如用 JMESPath `body.token` 提取 `token`，后续请求可使用 `{{token}}`。流程输入值随定义保存，运行时也可通过 API 提供。条件节点分别提供真、假出口，等待及内联控制块提供固定次数、集合及条件循环等控制。
 - 应用节点修改并保存流程，然后运行。可取消运行。在运行视图中通过画布和时间线选择节点，查看错误、实际请求、响应、预期值和实际值。当前服务进程为每个项目保留最近 12 次运行，本机最多同时运行 4 条流程。保存的接口和流程在重启后可重新打开。
+- 在「节点配置 → 备注」填写节点用途，然后应用节点配置并保存流程。主画布和子画布上的备注图标可悬停查看全文，Codex 工作台也会在流程结构中显示备注。
 - 页面与其他调用方共用同一个本地 API 和执行核心。服务启动后可在 [本地 API 文档](http://127.0.0.1:8765/docs) 查看路径和请求模型。
 
 ## Codex 本地插件
@@ -63,6 +64,7 @@ Codex 连接插件的 `stdio` 服务时，插件会通过本机 uv 按锁文件�
 
 - **接口管理**用 `api_list`、`api_get`、`api_create`、`api_update`、`api_delete`。`api_update` 只修改 `changes` 提供的字段。用 `api_import_preview` 预览后，可把原 `source`、返回的 `preview_id` 和从零开始的候选下标 `indices` 传给 `api_import_save`，保留原始鉴权配置。来源是 URL 时会重新读取。内容变化或 MCP 服务重启后需再次预览。调试用 `api_preview` 和 `api_send`。
 - **流程编排**用 `workflow_list`、`workflow_get`、`workflow_create`、`workflow_update`、`workflow_delete`。可替换完整的 `definition`，或通过 `graph` 在一次保存中增删改主画布节点和连线。删除节点时同时列出需要删除的连线。内联区域和运行设置可用完整定义修改，结构可用 `workflow_validate` 提前检查。
+- **节点备注**通过 `workflow_get` 读取节点的 `note`。用 `workflow_update` 传入 `node_notes`，例如 `{"login":"获取后续接口需要的访问令牌"}`。键是节点 ID，可同时修改主画布或子画布的多个节点。传空字符串可清除备注。
 - **流程运行**用 `workflow_run` 启动，`workflow_run_get` 查看进度和结果，`workflow_run_cancel` 取消。用 `environment_list` 查环境 ID。读取运行结果时指定 `node_id` 可查看该步实际请求、响应、提取和断言。保存的数据在页面刷新后可见。
 
 更新和删除接口或流程时传入最近读取的 `revision`。MCP 默认遮蔽专用鉴权配置、常见凭据名和接口指定的 API Key。运行快照使用执行当时的字段名。旧快照缺少该信息时会隐藏全部请求头、响应头和查询参数值。确需查看原值时，相关工具可显式传 `include_sensitive: true`。正文、自由文本和自定义表达式的结果可能包含业务敏感信息。更新时尽量只提交需要修改的字段，勿将脱敏视图当作完整定义保存。查看大量响应时可用 `api_send` 的 `detail: "summary"`，流程运行默认先返回状态摘要。

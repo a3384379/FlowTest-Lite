@@ -1,6 +1,6 @@
 import {
   ApiOutlined, ApartmentOutlined, BranchesOutlined, CheckCircleOutlined, ClockCircleOutlined,
-  ExportOutlined, FlagOutlined, GroupOutlined, PlayCircleOutlined, RetweetOutlined, SafetyOutlined,
+  ExportOutlined, FileTextOutlined, FlagOutlined, GroupOutlined, PlayCircleOutlined, RetweetOutlined, SafetyOutlined,
   RollbackOutlined, StopOutlined, UnorderedListOutlined,
 } from '@ant-design/icons'
 import type { ReactNode } from 'react'
@@ -39,4 +39,11 @@ export default function WorkflowNodeIcon({ type, control }: {
 }) {
   const icon = control && Object.hasOwn(controlIcons, control) ? controlIcons[control as ControlBlockKind] : icons[type]
   return <span className="flow-node-icon" data-node-type={type} aria-hidden="true">{icon}</span>
+}
+
+export function NodeNoteIndicator({ note }: { note?: string }) {
+  if (!note?.trim()) return null
+  return <span className="flow-node-note-indicator" title={note} aria-label={`节点备注：${note}`}>
+    <FileTextOutlined aria-hidden="true" />
+  </span>
 }

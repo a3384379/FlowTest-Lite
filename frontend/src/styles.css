@@ -758,6 +758,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ft-brand); outl
   font-size: 15px;
   line-height: 1.3;
 }
+.flow-node-note-indicator { flex: none; color: var(--ft-brand); font-size: 13px; }
+.workflow-region-canvas .flow-node-note-indicator { margin-inline-start: 5px; }
+.flow-run-node-note { margin-bottom: 12px; padding: 8px 10px; background: var(--ft-surface-subtle); }
+.flow-run-node-note p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .flow-node-detail {
   display: flex;
   align-items: center;

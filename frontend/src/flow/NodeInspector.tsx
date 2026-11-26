@@ -52,6 +52,11 @@ export default function NodeInspector(props: Props) {
       <Form.Item label="节点名称">
         <Input aria-label="节点名称" value={node.name} onChange={(event) => onUpdate({ ...original, name: event.target.value })} />
       </Form.Item>
+      <Form.Item label="备注">
+        <Input.TextArea aria-label="节点备注" value={node.note ?? ''} placeholder="说明这个节点在流程中的作用"
+          autoSize={{ minRows: 2, maxRows: 6 }} maxLength={2000}
+          onChange={(event) => onUpdate({ ...original, note: event.target.value })} />
+      </Form.Item>
       {type === 'api' && (
         <>
           <Form.Item label="引用接口">

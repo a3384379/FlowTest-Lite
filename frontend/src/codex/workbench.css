@@ -170,6 +170,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .node-evidence > * + * { margin-top: 8px; }
 .structure li { display: flex; gap: 8px; align-items: baseline; overflow-wrap: anywhere; padding: 6px 0; }
 .structure li + li { border-top: 1px solid var(--line); }
+.flow-notes { margin: 6px 0 0; }
+.flow-notes > div { padding-block: 6px; }
+.flow-notes dt { font-weight: 620; }
+.flow-notes dd { margin: 2px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 710px) {
   .top { padding: 12px; gap: 10px; }

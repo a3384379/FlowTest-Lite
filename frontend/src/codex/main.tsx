@@ -277,7 +277,11 @@ function FlowDetail({ projectId, item, environment, runId, onRun }: {
     onSuccess: () => cache.invalidateQueries({ queryKey: runKey }),
   })
   const active = run.data?.status === 'running'
-  const names = new Map(asset.data?.definition.nodes.map((step) => [step.id, step.name]))
+  const definition = asset.data?.definition
+  const names = new Map(definition?.nodes.map((step) => [step.id, step.name]))
+  const notedNodes = (definition
+    ? [...definition.nodes, ...(definition.regions ?? []).flatMap((region) => region.nodes)]
+    : []).filter((step) => step.note?.trim())
 
   return <>
     <div className="detail-heading">
@@ -314,6 +318,12 @@ function FlowDetail({ projectId, item, environment, runId, onRun }: {
           <span>{names.get(edge.target) ?? edge.target}</span>
         </li>)}
       </ul>
+      {notedNodes.length > 0 && <section aria-label="节点备注">
+        <h4>节点备注</h4>
+        <dl className="flow-notes">
+          {notedNodes.map((step) => <div key={step.id}><dt>{step.name}</dt><dd>{step.note}</dd></div>)}
+        </dl>
+      </section>}
       {Object.keys(asset.data.inputs).length > 0 && <JsonPanel title="已保存的流程输入" value={asset.data.inputs} />}
     </section>}
   </>
