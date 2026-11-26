@@ -82,6 +82,7 @@ function Workbench({ projectId, picker, page, onPage, runs, onRun }: {
       <aside className="catalog" aria-label={page === 'apis' ? '接口列表' : '流程列表'}>
         <div className="spread"><h2>{page === 'apis' ? '接口列表' : '流程列表'}</h2>
           <button type="button" onClick={() => {
+            void cache.invalidateQueries({ queryKey: ['projects'] })
             void cache.invalidateQueries({ queryKey: ['catalog'] })
             void cache.invalidateQueries({ queryKey: ['asset'] })
             void cache.invalidateQueries({ queryKey: ['environments'] })
@@ -138,7 +139,8 @@ function ProjectWorkbench() {
     queryKey: ['projects'],
     queryFn: () => call<{ items: Project[]; default_project_id: string }>('project_list'),
   })
-  const current = projects.data?.items.find((item) => item.id === (project ?? projects.data?.default_project_id))
+  const current = projects.data?.items.find((item) => item.id === project)
+    ?? projects.data?.items.find((item) => item.id === projects.data?.default_project_id)
   const save = useMutation({
     mutationFn: ({ id, name }: { id?: string; name: string }) => call<Project>(id ? 'project_rename' : 'project_create',
       { name: name.trim(), ...(id ? { project_id: id } : {}) }),

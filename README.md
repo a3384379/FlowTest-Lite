@@ -60,8 +60,9 @@ Codex 连接插件的 `stdio` 服务时，插件会通过本机 uv 按锁文件�
 
 ### MCP 工具
 
-先用 `project_list` 获取项目 ID。其他接口、流程和运行工具传入相同的 `project_id`，省略时使用默认项目。`project_create` 可以新建项目，`project_rename` 可以重命名。浏览器编辑器链接会携带工作台中选中的项目。直接调用 HTTP API 时，在请求中添加 `X-FlowTest-Project` 请求头指定项目。
+先用 `project_list` 获取项目 ID。其他接口、流程和运行工具传入相同的 `project_id`，省略时使用默认项目。浏览器编辑器链接会携带工作台中选中的项目。直接调用 HTTP API 时，在请求中添加 `X-FlowTest-Project` 请求头指定项目。
 
+- **项目管理**用 `project_list`、`project_create`、`project_rename`、`project_delete`。删除默认只接受空项目。确认永久删除项目内资产和运行记录时，传入 `delete_contents: true`。默认项目和仍有流程在运行的项目受删除保护。
 - **接口管理**用 `api_list`、`api_get`、`api_create`、`api_update`、`api_delete`。`api_update` 只修改 `changes` 提供的字段。用 `api_import_preview` 预览后，可把原 `source`、返回的 `preview_id` 和从零开始的候选下标 `indices` 传给 `api_import_save`，保留原始鉴权配置。来源是 URL 时会重新读取。内容变化或 MCP 服务重启后需再次预览。调试用 `api_preview` 和 `api_send`。
 - **流程编排**用 `workflow_list`、`workflow_get`、`workflow_create`、`workflow_update`、`workflow_delete`。可替换完整的 `definition`，或通过 `graph` 在一次保存中增删改主画布节点和连线。删除节点时同时列出需要删除的连线。内联区域和运行设置可用完整定义修改，结构可用 `workflow_validate` 提前检查。
 - **节点备注**通过 `workflow_get` 读取节点的 `note`。用 `workflow_update` 传入 `node_notes`，例如 `{"login":"获取后续接口需要的访问令牌"}`。键是节点 ID，可同时修改主画布或子画布的多个节点。传空字符串可清除备注。

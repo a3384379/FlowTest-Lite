@@ -192,7 +192,7 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
 
     server = FastMCP(SERVICE_NAME, log_level="WARNING", instructions=(
         "管理本机 FlowTest-Lite 保存的接口和流程。用 project_list 查项目，后续工具传同一个 project_id。"
-        "查找资源后使用其 ID 操作，更新和删除需要最新 revision。"
+        "查找资源后使用其 ID 操作，更新和删除接口或流程需要最新 revision。"
         + ("用户要求在 Codex 中打开工作台时调用 workbench_view。"
            if codex_app else "")
         + "用户要求在浏览器打开工作台时调用 workbench_open 并将 open_browser 设为 true。"
@@ -245,6 +245,16 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
     async def project_rename(project_id: UUID, name: str) -> Payload:
         """修改项目名称，保留项目 ID 及项目内的资产。"""
         return await api.request("PUT", f"projects/{project_id}", body=ProjectName(name=name).model_dump())
+
+    @server.tool(annotations=WRITE)
+    async def project_delete(
+        project_id: UUID, delete_contents: Annotated[bool, Field(
+            description="确认一并永久删除项目内的接口、流程、环境、分组、公共配置、附件和运行记录。",
+        )] = False,
+    ) -> Payload:
+        """删除指定项目。默认只删除空项目。带数据的项目需显式指定 delete_contents=true。"""
+        await api.request("DELETE", f"projects/{project_id}", params={"delete_contents": str(delete_contents).lower()})
+        return {"id": str(project_id), "deleted": True}
 
     @server.tool(annotations=READ)
     async def api_list(query: str = "", group: str | None = None, offset: Offset = 0, limit: Limit = 50, project_id: ProjectId = None) -> Payload:

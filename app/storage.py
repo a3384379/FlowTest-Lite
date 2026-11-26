@@ -95,6 +95,12 @@ class Store:
         try:
             with db:
                 yield db
+        except sqlite3.IntegrityError as error:
+            if error.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY and not db.execute(
+                "SELECT 1 FROM projects WHERE id=?", (self.project_id,),
+            ).fetchone():
+                raise MissingAsset("项目不存在") from error
+            raise
         finally:
             db.close()
 
@@ -125,6 +131,22 @@ class Store:
         except sqlite3.IntegrityError as error:
             raise EditConflict("已有同名项目") from error
         return {"id": project_id, "name": name}
+
+    def delete_project(self, project_id: str, *, delete_contents: bool = False) -> None:
+        if project_id == str(DEFAULT_PROJECT_ID):
+            raise EditConflict("默认项目用于未指定项目的调用，无法删除")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+                raise MissingAsset("项目不存在")
+            if delete_contents:
+                for table in SCOPED_TABLES:
+                    db.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
+            elif any(db.execute(
+                f"SELECT 1 FROM {table} WHERE project_id=? LIMIT 1", (project_id,),
+            ).fetchone() for table in SCOPED_TABLES):
+                raise EditConflict("项目中有数据。确认一起删除后，请传入 delete_contents=true")
+            db.execute("DELETE FROM projects WHERE id=?", (project_id,))
 
     @staticmethod
     def asset(row: sqlite3.Row | None) -> StoredAsset:

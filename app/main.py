@@ -160,6 +160,20 @@ def rename_project(key: UUID, value: ProjectName, request: Request):
     return request.app.state.store.save_project(value.name, str(key))
 
 
+@app.delete("/api/projects/{key}", status_code=204)
+async def delete_project(key: UUID, request: Request, delete_contents: bool = False):
+    project_id = str(key)
+    runs = request.app.state.runs
+    project_runs = [run for run in runs.values() if run.project_id == project_id]
+    if any(run.status == "running" for run in project_runs):
+        raise EditConflict("项目有正在运行的流程，请等待结束或取消运行")
+    if project_runs and not delete_contents:
+        raise EditConflict("项目中有运行记录。确认一起删除后，请传入 delete_contents=true")
+    request.app.state.store.delete_project(project_id, delete_contents=delete_contents)
+    for run in project_runs:
+        del runs[run.id]
+
+
 def validated(kind: AssetKind, value: dict, store: Store):
     model = ASSET_MODELS[kind].model_validate(value)
     if isinstance(model, WorkflowAsset):
