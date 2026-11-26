@@ -1,8 +1,9 @@
+import { useProjectApi } from '../../lib/project-context'
 import { EditOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, ImportOutlined, InboxOutlined, PaperClipOutlined, PlusOutlined, SwapOutlined } from '@ant-design/icons'
 import { Alert, App, AutoComplete, Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Space, Spin, Tooltip } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { apiErrorMessage, client, httpMethods, type ApiAsset } from '../../lib/api'
+import { apiErrorMessage, httpMethods, type ApiAsset } from '../../lib/api'
 
 export function HttpMethodBadge({ method }: { method: string }) {
   return <span className="http-method" data-method={method}>{method}</span>
@@ -16,6 +17,7 @@ export default function ApiDirectory({ apis, selected, loading, onChoose, onCrea
   onFiles: () => void
   onRefresh: () => Promise<void>
 }) {
+  const { client } = useProjectApi()
   const [group, setGroup] = useState<string | null>(null)
   const [method, setMethod] = useState<string>()
   const [search, setSearch] = useState('')

@@ -3,11 +3,11 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,9 +21,10 @@ from app.http_runtime import (
 )
 from app.import_assets import parse_import
 from app.models import (
-    ApiAsset, ApiGroupName, CommonSettings, Environment, ImportOptions, MoveApis,
+    ApiAsset, ApiGroupName, CommonSettings, Environment, ImportOptions, MoveApis, ProjectName,
     RunOptions, SendOptions, WorkflowAsset,
 )
+from app.projects import DEFAULT_PROJECT_ID, PROJECT_HEADER
 from app.service_launcher import (
     FRONTEND_DIST, SERVICE_API_VERSION, SERVICE_NAME, data_directory, data_store_id, frontend_ready,
 )
@@ -40,6 +41,7 @@ ASSETS_MOUNTED = (DIST / "assets").is_dir()
 class RunState:
     id: str
     workflow_id: str
+    project_id: str
     token: CancellationToken
     status: str = "running"
     nodes: dict[str, dict] = field(default_factory=dict)
@@ -123,8 +125,13 @@ async def invalid_request(_request: Request, error: RequestValidationError):
     return JSONResponse(status_code=422, content={"detail": detail})
 
 
-def store_of(request: Request) -> Store:
-    return request.app.state.store
+def store_of(
+    request: Request, project_id: Annotated[UUID | None, Header(alias=PROJECT_HEADER)] = None,
+) -> Store:
+    return request.app.state.store.for_project(str(project_id or DEFAULT_PROJECT_ID))
+
+
+ProjectStore = Annotated[Store, Depends(store_of)]
 
 
 @app.get("/api/health", include_in_schema=False)
@@ -134,61 +141,82 @@ def health(request: Request) -> dict:
         "api_version": SERVICE_API_VERSION,
         "data_store": request.app.state.data_store_id,
         "web_ready": ASSETS_MOUNTED and frontend_ready(),
+        "projects": True,
     }
 
 
-def validated(kind: AssetKind, value: dict):
+@app.get("/api/projects")
+def list_projects(request: Request):
+    return request.app.state.store.projects()
+
+
+@app.post("/api/projects", status_code=201)
+def create_project(value: ProjectName, request: Request):
+    return request.app.state.store.save_project(value.name)
+
+
+@app.put("/api/projects/{key}")
+def rename_project(key: UUID, value: ProjectName, request: Request):
+    return request.app.state.store.save_project(value.name, str(key))
+
+
+def validated(kind: AssetKind, value: dict, store: Store):
     model = ASSET_MODELS[kind].model_validate(value)
     if isinstance(model, WorkflowAsset):
-        validate_definition(model.definition)
+        requests = validate_definition(model.definition)
+        if requests:
+            available = store.asset_ids("api")
+            for node_id, config in requests.items():
+                if str(config.api_definition_id) not in available:
+                    raise ValueError(f"节点 {node_id} 引用的接口在当前项目中不存在")
     return model
 
 
 @app.get("/api/assets/{kind}")
-def list_assets(kind: AssetKind, request: Request):
-    return [asset.payload() for asset in store_of(request).list(kind)]
+def list_assets(kind: AssetKind, store: ProjectStore):
+    return [asset.payload() for asset in store.list(kind)]
 
 
 @app.post("/api/assets/{kind}", status_code=201)
-def create_asset(kind: AssetKind, value: dict, request: Request):
-    return store_of(request).create_many(kind, [validated(kind, value)])[0].payload()
+def create_asset(kind: AssetKind, value: dict, store: ProjectStore):
+    return store.create_many(kind, [validated(kind, value, store)])[0].payload()
 
 
 @app.get("/api/assets/{kind}/{key}")
-def get_asset(kind: AssetKind, key: UUID, request: Request):
-    return store_of(request).get(kind, str(key)).payload()
+def get_asset(kind: AssetKind, key: UUID, store: ProjectStore):
+    return store.get(kind, str(key)).payload()
 
 
 @app.put("/api/assets/{kind}/{key}")
 def update_asset(
-    kind: AssetKind, key: UUID, value: dict, request: Request, revision: int | None = Query(default=None, ge=1),
+    kind: AssetKind, key: UUID, value: dict, store: ProjectStore, revision: int | None = Query(default=None, ge=1),
 ):
-    return store_of(request).put(kind, str(key), validated(kind, value), revision).payload()
+    return store.put(kind, str(key), validated(kind, value, store), revision).payload()
 
 
 @app.delete("/api/assets/{kind}/{key}", status_code=204)
-def delete_asset(kind: AssetKind, key: UUID, request: Request, revision: int | None = Query(default=None, ge=1)):
-    store_of(request).delete(kind, str(key), revision=revision)
+def delete_asset(kind: AssetKind, key: UUID, store: ProjectStore, revision: int | None = Query(default=None, ge=1)):
+    store.delete(kind, str(key), revision=revision)
 
 
 @app.get("/api/groups")
-def list_api_groups(request: Request) -> list[str]:
-    return store_of(request).groups()
+def list_api_groups(store: ProjectStore) -> list[str]:
+    return store.groups()
 
 
 @app.put("/api/groups", status_code=204)
-def save_api_group(value: ApiGroupName, request: Request):
-    store_of(request).put_group(value.name, value.previous)
+def save_api_group(value: ApiGroupName, store: ProjectStore):
+    store.put_group(value.name, value.previous)
 
 
 @app.delete("/api/groups", status_code=204)
-def delete_api_group(request: Request, name: str = Query(min_length=1, max_length=100)):
-    store_of(request).delete_group(name)
+def delete_api_group(store: ProjectStore, name: str = Query(min_length=1, max_length=100)):
+    store.delete_group(name)
 
 
 @app.post("/api/groups/move", status_code=204)
-def move_apis(value: MoveApis, request: Request):
-    store_of(request).move_apis([str(key) for key in value.ids], value.group.strip())
+def move_apis(value: MoveApis, store: ProjectStore):
+    store.move_apis([str(key) for key in value.ids], value.group.strip())
 
 
 def common_settings(store: Store) -> CommonSettings:
@@ -205,50 +233,49 @@ def environment_for(store: Store, key: UUID | None) -> Environment | None:
 
 
 @app.get("/api/settings")
-def get_settings(request: Request):
-    return common_settings(store_of(request))
+def get_settings(store: ProjectStore):
+    return common_settings(store)
 
 
 @app.put("/api/settings")
-def update_settings(value: CommonSettings, request: Request):
-    store_of(request).put("settings", "common", value, None)
+def update_settings(value: CommonSettings, store: ProjectStore):
+    store.put("settings", "common", value, None)
     return value
 
 
 @app.get("/api/files")
-def list_files(request: Request):
-    return store_of(request).files()
+def list_files(store: ProjectStore):
+    return store.files()
 
 
 @app.post("/api/files", status_code=201)
-async def upload_file(request: Request, file: UploadFile = File()):
+async def upload_file(store: ProjectStore, file: UploadFile = File()):
     content = await file.read(MAX_BODY_BYTES + 1)
     if len(content) > MAX_BODY_BYTES:
         raise HTTPException(413, "单个附件最大 10 MiB")
     filename = (file.filename or "upload").replace("\\", "/").rsplit("/", 1)[-1]
-    return store_of(request).upload(filename[:250], file.content_type or "application/octet-stream", content)
+    return store.upload(filename[:250], file.content_type or "application/octet-stream", content)
 
 
 @app.delete("/api/files/{key}", status_code=204)
-def delete_file(key: UUID, request: Request):
-    store_of(request).delete_file(str(key))
+def delete_file(key: UUID, store: ProjectStore):
+    store.delete_file(str(key))
 
 
 @app.post("/api/import/preview")
-async def import_preview(value: ImportOptions, request: Request):
-    return await parse_import(value, store_of(request))
+async def import_preview(value: ImportOptions, store: ProjectStore):
+    return await parse_import(value, store)
 
 
 @app.post("/api/import/save", status_code=201)
-def import_save(assets: list[ApiAsset], request: Request):
+def import_save(assets: list[ApiAsset], store: ProjectStore):
     if not 1 <= len(assets) <= 1000:
         raise HTTPException(422, "请选择 1–1000 个接口")
-    return [item.payload() for item in store_of(request).create_many("api", assets)]
+    return [item.payload() for item in store.create_many("api", assets)]
 
 
 @app.post("/api/requests/{key}/preview")
-def preview(key: UUID, options: SendOptions, request: Request):
-    store = store_of(request)
+def preview(key: UUID, options: SendOptions, store: ProjectStore):
     asset = ApiAsset.model_validate(store.get("api", str(key)).data)
     prepared = prepare_request(
         asset, common_settings(store), environment_for(store, options.environment_id),
@@ -258,8 +285,7 @@ def preview(key: UUID, options: SendOptions, request: Request):
 
 
 @app.post("/api/requests/{key}/send")
-async def send(key: UUID, options: SendOptions, request: Request):
-    store = store_of(request)
+async def send(key: UUID, options: SendOptions, store: ProjectStore):
     asset = ApiAsset.model_validate(store.get("api", str(key)).data)
     common = common_settings(store)
     environment = environment_for(store, options.environment_id)
@@ -310,21 +336,21 @@ async def execute_run(plan: WorkflowPlan, run: RunState) -> None:
 
 
 @app.post("/api/workflows/{key}/run", status_code=202)
-async def start_run(key: UUID, options: RunOptions, request: Request):
+async def start_run(key: UUID, options: RunOptions, request: Request, store: ProjectStore):
     runs = request.app.state.runs
     tasks = request.app.state.tasks
     if len(tasks) >= 4:
         raise HTTPException(409, "最多同时运行 4 条流程")
-    store = store_of(request)
     workflow = WorkflowAsset.model_validate(store.get("workflow", str(key)).data)
     plan = WorkflowPlan.prepare(
         workflow, common_settings(store), environment_for(store, options.environment_id),
         workflow.inputs if options.runtime_variables is None else options.runtime_variables, store,
     )
-    if len(runs) >= 12:
-        oldest = next(key for key, run in runs.items() if run.status != "running")
-        del runs[oldest]
-    run = RunState(str(uuid4()), str(key), CancellationToken())
+    project_runs = [run for run in runs.values() if run.project_id == store.project_id]
+    if len(project_runs) >= 12:
+        oldest = next(run for run in project_runs if run.status != "running")
+        del runs[oldest.id]
+    run = RunState(str(uuid4()), str(key), store.project_id, CancellationToken())
     runs[run.id] = run
     task = asyncio.create_task(execute_run(plan, run))
     tasks.add(task)
@@ -334,23 +360,23 @@ async def start_run(key: UUID, options: RunOptions, request: Request):
 
 @app.get("/api/runs/{key}")
 async def get_run(
-    key: UUID, request: Request, view: Literal["full", "summary"] = "full",
+    key: UUID, request: Request, store: ProjectStore, view: Literal["full", "summary"] = "full",
     node_id: str | None = Query(default=None, min_length=1, max_length=128),
 ):
-    return require_run(key, request).payload(view=view, node_id=node_id)
+    return require_run(key, request, store).payload(view=view, node_id=node_id)
 
 
 @app.post("/api/runs/{key}/cancel")
-async def cancel_run(key: UUID, request: Request, view: Literal["full", "summary"] = "full"):
-    run = require_run(key, request)
+async def cancel_run(key: UUID, request: Request, store: ProjectStore, view: Literal["full", "summary"] = "full"):
+    run = require_run(key, request, store)
     if run.status == "running":
         run.token.cancel()
     return run.payload(view=view)
 
 
-def require_run(key: UUID, request: Request) -> RunState:
+def require_run(key: UUID, request: Request, store: Store) -> RunState:
     run = request.app.state.runs.get(str(key))
-    if run is None:
+    if run is None or run.project_id != store.project_id:
         raise MissingAsset("执行结果已过期或不存在")
     return run
 

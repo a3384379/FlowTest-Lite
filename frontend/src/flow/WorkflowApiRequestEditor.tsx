@@ -46,7 +46,7 @@ import {
   type ParameterField,
 } from '../features/api-console/bulk-edit'
 import { BulkEditor, DynamicFields } from '../features/api-console/StructuredFields'
-import { getApiDetail, previewApi } from '../features/api-console/api-service'
+import { useApiService } from '../features/api-console/api-service'
 import type { ApiVersion, Artifact, WorkflowNode } from '../lib/api'
 
 type SectionMode = 'inherit' | 'custom'
@@ -130,6 +130,7 @@ function RequestEditorLoader({
   onClose,
   ...props
 }: EditorProps & { apiId: string; onClose: () => void }) {
+  const { getApiDetail } = useApiService()
   const detail = useQuery({
     queryKey: ['api-detail', apiId],
     queryFn: () => getApiDetail(apiId),
@@ -186,6 +187,7 @@ function RequestEditor({
   onUpdate,
   onClose,
 }: EditorProps & { detail: ApiVersion; onClose: () => void }) {
+  const { previewApi } = useApiService()
   const session = useNodeEditContext()
   const identity = requestIdentity(node, detail)
   const restored = restoreRequestDraft(node, session?.draft.requestDraft, identity.projectId)

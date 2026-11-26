@@ -1,15 +1,15 @@
+import { useAssetSelection, useProjectApi } from '../lib/project-context'
 import { ApartmentOutlined, DownOutlined, MoreOutlined, PlayCircleOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
 import { useState, useSyncExternalStore } from 'react'
 import { Alert, App, Button, Dropdown, Empty, Form, Input, Modal, Popover, Segmented, Select, Space } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
 import AssetTabs from '../components/AssetTabs'
 import { Status } from '../components/RunEvidence'
 import WorkflowCanvas from '../flow/WorkflowCanvas'
 import { jsonEqual } from '../flow/editor/editor-types'
 import { useDraftSession } from '../features/drafts/draft-session'
 import {
-  apiDefinition, apiErrorMessage, client, createAsset, deleteAsset, listAssets, updateAsset,
+  apiDefinition, apiErrorMessage,
   type Artifact, type FlowRun, type Workflow, type WorkflowDefinition, type WorkflowInput,
 } from '../lib/api'
 
@@ -24,7 +24,8 @@ const initialDefinition: WorkflowDefinition = {
 }
 
 export default function FlowsPage({ environment }: { environment?: string }) {
-  const [params, setParams] = useSearchParams()
+  const { client, createAsset, deleteAsset, listAssets, updateAsset } = useProjectApi()
+  const [selectedId, selectAsset] = useAssetSelection()
   const [filter, setFilter] = useState('')
   const [creating, setCreating] = useState(false)
   const [savingId, setSavingId] = useState<string>()
@@ -44,7 +45,7 @@ export default function FlowsPage({ environment }: { environment?: string }) {
   const apiList = useQuery({ queryKey: ['apis'], queryFn: () => listAssets('api') })
   const files = useQuery({ queryKey: ['files'], queryFn: () => client.get<Artifact[]>('/files').then((res) => res.data) })
   const workflows = workflowList.data ?? []
-  const id = params.get('id') ?? workflows[0]?.id
+  const id = selectedId ?? workflows[0]?.id
   const saved = workflows.find((item) => item.id === id) ?? workflows[0]
   const current = saved && (work[saved.id] ?? saved)
   const dirty = Boolean(current && work[current.id])
@@ -98,7 +99,7 @@ export default function FlowsPage({ environment }: { environment?: string }) {
     setView('edit')
     setSelectedRun(undefined)
     setCatalogOpen(false)
-    setParams({ id: key })
+    selectAsset(key)
   }
   async function create(name: string) {
     if (savingId) return
@@ -148,7 +149,7 @@ export default function FlowsPage({ environment }: { environment?: string }) {
       drafts.dirtyNodeEditorKeys(`workflow:${workflow.id}:`).forEach((key) => drafts.clearNodeEditor(key))
       setSelectedRun(undefined)
       setView('edit')
-      setParams({})
+      selectAsset()
     } catch (error) { notify(error) }
   }
   async function start(workflow: Workflow, variables?: Record<string, unknown>) {

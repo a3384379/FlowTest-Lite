@@ -229,6 +229,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ft-brand); outl
   border-bottom: 1px solid var(--ft-border-subtle);
 }
 .app-header .app-environment { justify-self: end; justify-content: flex-end; }
+.app-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-width: 0; }
+.project-picker { display: flex; align-items: center; gap: 4px; }
+.project-picker .ant-select { min-width: 118px; max-width: 166px; }
+.project-picker .ant-btn { padding-inline: 6px; }
 .app-brand {
   display: inline-flex;
   gap: 9px;

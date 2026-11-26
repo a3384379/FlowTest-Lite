@@ -1,8 +1,8 @@
+import { useAssetSelection, useProjectApi } from '../lib/project-context'
 import { DownloadOutlined, EditOutlined, ImportOutlined, MoreOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons'
 import { useState, useSyncExternalStore } from 'react'
 import { Alert, App, Button, Checkbox, Drawer, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Upload } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
 import APIWorkbench from '../features/api-console/APIWorkbench'
 import ApiWorkspace from '../features/api-console/ApiWorkspace'
 import ApiDirectory, { HttpMethodBadge } from '../features/api-console/ApiDirectory'
@@ -10,7 +10,7 @@ import AssetTabs from '../components/AssetTabs'
 import { useDraftSession } from '../features/drafts/draft-session'
 import { InterfaceResult } from '../components/RunEvidence'
 import {
-  apiDetail, apiErrorMessage, client, createAsset, deleteAsset, listAssets, updateAsset,
+  apiDetail, apiErrorMessage,
   type ApiAsset, type ApiInput, type Artifact, type ImportCandidate, type InterfaceRun, type RequestDefinition, type RequestSnapshot,
 } from '../lib/api'
 
@@ -21,7 +21,8 @@ const defaultRequest: RequestDefinition = {
 const emptyAsset: ApiInput = { name: '', group: '', description: '', base_url: '', request: defaultRequest }
 
 export default function ApiPage({ environment }: { environment?: string }) {
-  const [params, setParams] = useSearchParams()
+  const { client, createAsset, deleteAsset, listAssets, updateAsset } = useProjectApi()
+  const [selectedId, selectAsset] = useAssetSelection()
   const [editor, setEditor] = useState<ApiInput | null>(null)
   const [editingId, setEditingId] = useState<string>()
   const [importOpen, setImportOpen] = useState(false)
@@ -38,7 +39,7 @@ export default function ApiPage({ environment }: { environment?: string }) {
     queryFn: () => client.get<Artifact[]>('/files').then((res) => res.data),
   })
   const apis = catalog.data ?? []
-  const selected = apis.find((item) => item.id === params.get('id')) ?? apis[0]
+  const selected = apis.find((item) => item.id === selectedId) ?? apis[0]
   const history = useQuery({
     queryKey: ['api-runs', selected?.id],
     queryFn: () => Promise.resolve([] as InterfaceRun[]),
@@ -62,7 +63,7 @@ export default function ApiPage({ environment }: { environment?: string }) {
     cache.setQueryData(['apis'], current)
     await cache.invalidateQueries({ queryKey: ['api-groups'] })
   }
-  function choose(id: string) { setParams({ id }) }
+  function choose(id: string) { selectAsset(id) }
   function put(asset: ApiAsset) {
     cache.setQueryData<ApiAsset[]>(['apis'], (old) => [asset, ...(old ?? []).filter((item) => item.id !== asset.id)])
     cache.setQueryData(['api-detail', asset.id], apiDetail(asset))
@@ -118,7 +119,7 @@ export default function ApiPage({ environment }: { environment?: string }) {
       drafts.apis.delete(api.id)
       drafts.markUnsafe(api.id, false)
       cache.setQueryData<ApiAsset[]>(['apis'], (old) => old?.filter((item) => item.id !== api.id))
-      setParams({})
+      selectAsset()
     } catch (error) { notify(error) }
   }
 
@@ -259,6 +260,7 @@ function ApiEditDialog({ value, editing, saving, close, save }: {
 }
 
 function ImportDialog({ close, saved }: { close: () => void; saved: (assets: ApiAsset[]) => Promise<void> }) {
+  const { client } = useProjectApi()
   const [kind, setKind] = useState('auto')
   const [content, setContent] = useState('')
   const [url, setUrl] = useState('')

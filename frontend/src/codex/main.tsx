@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ApiAsset, FlowRun, InterfaceRun, NodeExecution, RequestSnapshot, Workflow } from '../lib/api'
+import type { ApiAsset, FlowRun, InterfaceRun, NodeExecution, Project, RequestSnapshot, Workflow } from '../lib/api'
 import { call, host } from './bridge'
 import { Checks, JsonPanel, NodeEvidence, RequestEvidence, ResponseEvidence, Status } from './evidence'
 import styles from './workbench.css?raw'
@@ -16,33 +16,36 @@ function ErrorMessage({ error }: { error: Error | null }) {
   return error && <p className="error" role="alert">{error.message}</p>
 }
 
-function Workbench() {
-  const [page, setPage] = useState<Page>('apis')
+function Workbench({ projectId, picker, page, onPage, runs, onRun }: {
+  projectId: string; picker: ReactNode; page: Page; onPage: (page: Page) => void
+  runs: Record<string, string>; onRun: (key: string, id: string) => void
+}) {
   const [input, setInput] = useState('')
   const [query, setQuery] = useState('')
   const [offset, setOffset] = useState(0)
   const [selections, setSelections] = useState<Partial<Record<Page, string>>>({})
   const [environment, setEnvironment] = useState('')
-  const [runs, setRuns] = useState<Record<string, string>>({})
   const cache = useQueryClient()
   const catalog = useQuery({
-    queryKey: ['catalog', page, query, offset],
-    queryFn: () => call<Catalog>(page === 'apis' ? 'api_list' : 'workflow_list', { query, offset, limit: pageSize }),
+    queryKey: ['catalog', projectId, page, query, offset],
+    queryFn: () => call<Catalog>(page === 'apis' ? 'api_list' : 'workflow_list', {
+      query, offset, limit: pageSize, project_id: projectId,
+    }),
   })
   const environments = useQuery({
-    queryKey: ['environments'],
-    queryFn: () => call<{ items: Asset[] }>('environment_list'),
+    queryKey: ['environments', projectId],
+    queryFn: () => call<{ items: Asset[] }>('environment_list', { project_id: projectId }),
   })
   const selected = catalog.data?.items.find((item) => item.id === selections[page]) ?? catalog.data?.items[0]
   const editor = useMutation({
     mutationFn: ({ page, id }: { page: Page; id?: string }) => call<{ url: string; opened: boolean }>(
-      'workbench_open', { page, ...(id ? { asset_id: id } : {}) },
+      'workbench_open', { page, project_id: projectId, ...(id ? { asset_id: id } : {}) },
     ),
   })
 
   function navigate(target: Page) {
     if (page === target) return
-    setPage(target)
+    onPage(target)
     setInput('')
     setQuery('')
     setOffset(0)
@@ -57,7 +60,7 @@ function Workbench() {
 
   return <>
     <header className="top">
-      <div className="brand"><span aria-hidden="true" className="brand-mark">FT</span><h1>FlowTest<span> Lite</span></h1></div>
+      <div className="brand"><span aria-hidden="true" className="brand-mark">FT</span><h1>FlowTest<span> Lite</span></h1>{picker}</div>
       <nav aria-label="工作台">
         <button type="button" aria-current={page === 'apis' ? 'page' : undefined} onClick={() => navigate('apis')}>接口</button>
         <button type="button" aria-current={page === 'flows' ? 'page' : undefined} onClick={() => navigate('flows')}>流程</button>
@@ -116,28 +119,90 @@ function Workbench() {
       <main className="detail" aria-label="条目详情">
         {selected
           ? page === 'apis'
-            ? <ApiDetail key={selected.id} item={selected} environment={environment} />
-            : <FlowDetail key={selected.id} item={selected} environment={environment} runId={runs[selected.id]}
-                onRun={(id) => setRuns((previous) => ({ ...previous, [selected.id]: id }))} />
+            ? <ApiDetail key={selected.id} projectId={projectId} item={selected} environment={environment} />
+            : <FlowDetail key={selected.id} projectId={projectId} item={selected} environment={environment}
+                runId={runs[`${projectId}:${selected.id}`]} onRun={(id) => onRun(`${projectId}:${selected.id}`, id)} />
           : !catalog.isPending && !catalog.error && <p className="muted empty">选择条目后查看详情。</p>}
       </main>
     </div>
   </>
 }
 
-function ApiDetail({ item, environment }: { item: CatalogItem; environment: string }) {
+function ProjectWorkbench() {
+  const [project, setProject] = useState<string>()
+  const [page, setPage] = useState<Page>('apis')
+  const [runs, setRuns] = useState<Record<string, string>>({})
+  const [editor, setEditor] = useState<{ id?: string; name: string }>()
+  const cache = useQueryClient()
+  const projects = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => call<{ items: Project[]; default_project_id: string }>('project_list'),
+  })
+  const current = projects.data?.items.find((item) => item.id === (project ?? projects.data?.default_project_id))
+  const save = useMutation({
+    mutationFn: ({ id, name }: { id?: string; name: string }) => call<Project>(id ? 'project_rename' : 'project_create',
+      { name: name.trim(), ...(id ? { project_id: id } : {}) }),
+    onSuccess: (saved, input) => {
+      cache.setQueryData<typeof projects.data>(['projects'], (previous) => previous && {
+        ...previous,
+        items: input.id ? previous.items.map((item) => item.id === saved.id ? saved : item) : [...previous.items, saved],
+      })
+      setProject(saved.id)
+      setEditor(undefined)
+    },
+  })
+
+  function edit(next: { id?: string; name: string }) {
+    save.reset()
+    setEditor(next)
+  }
+
+  const picker = <div className="project-picker">
+    <select aria-label="当前项目" value={current?.id ?? ''} disabled={save.isPending}
+      onChange={(event) => { setProject(event.target.value); setEditor(undefined) }}>
+      {projects.data?.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+    </select>
+    <button type="button" disabled={save.isPending} onClick={() => edit({ name: '' })}>新建项目</button>
+    <button type="button" disabled={save.isPending || !current}
+      onClick={() => current && edit(current)}>重命名项目</button>
+  </div>
+  const projectForm = editor && <form className="project-form" onSubmit={(event) => {
+    event.preventDefault()
+    if (editor.name.trim() && !save.isPending) save.mutate(editor)
+  }}>
+    <label>项目名称 <input maxLength={80} required autoFocus value={editor.name}
+      onChange={(event) => setEditor({ ...editor, name: event.target.value })} /></label>
+    <button type="submit" className="primary" disabled={save.isPending || !editor.name.trim()}>保存项目</button>
+    <button type="button" disabled={save.isPending} onClick={() => setEditor(undefined)}>取消</button>
+    <ErrorMessage error={save.error} />
+  </form>
+
+  if (!current) return <main className="connection">
+    <h1>FlowTest Lite</h1>
+    {projects.isPending ? <p role="status">正在读取项目…</p> : <>
+      <ErrorMessage error={projects.error} />
+      <button type="button" onClick={() => void projects.refetch()}>刷新项目</button>
+    </>}
+  </main>
+  return <Workbench key={current.id} projectId={current.id} picker={<div>{picker}{projectForm}</div>}
+    page={page} onPage={setPage} runs={runs} onRun={(key, id) => setRuns((previous) => ({ ...previous, [key]: id }))} />
+}
+
+function ApiDetail({ projectId, item, environment }: { projectId: string; item: CatalogItem; environment: string }) {
   const [output, setOutput] = useState<'preview' | 'send'>()
   const asset = useQuery({
-    queryKey: ['asset', 'api', item.id, item.revision],
-    queryFn: () => call<ApiAsset>('api_get', { api_id: item.id }),
+    queryKey: ['asset', projectId, 'api', item.id, item.revision],
+    queryFn: () => call<ApiAsset>('api_get', { api_id: item.id, project_id: projectId }),
   })
   const preview = useMutation({
-    mutationFn: () => call<RequestSnapshot>('api_preview', { api_id: item.id, options: { environment_id: environment || null } }),
+    mutationFn: () => call<RequestSnapshot>('api_preview', {
+      api_id: item.id, project_id: projectId, options: { environment_id: environment || null },
+    }),
     onMutate: () => setOutput('preview'),
   })
   const send = useMutation({
     mutationFn: () => call<InterfaceRun>('api_send', {
-      api_id: item.id, options: { environment_id: environment || null }, detail: 'full',
+      api_id: item.id, project_id: projectId, options: { environment_id: environment || null }, detail: 'full',
     }, 45_000),
     onMutate: () => setOutput('send'),
   })
@@ -173,38 +238,42 @@ function ApiDetail({ item, environment }: { item: CatalogItem; environment: stri
   </>
 }
 
-function FlowDetail({ item, environment, runId, onRun }: {
-  item: CatalogItem; environment: string; runId?: string; onRun: (id: string) => void
+function FlowDetail({ projectId, item, environment, runId, onRun }: {
+  projectId: string; item: CatalogItem; environment: string; runId?: string; onRun: (id: string) => void
 }) {
   const [selectedNode, setSelectedNode] = useState<string>()
   const cache = useQueryClient()
   const asset = useQuery({
-    queryKey: ['asset', 'flow', item.id, item.revision],
-    queryFn: () => call<Workflow>('workflow_get', { workflow_id: item.id }),
+    queryKey: ['asset', projectId, 'flow', item.id, item.revision],
+    queryFn: () => call<Workflow>('workflow_get', { workflow_id: item.id, project_id: projectId }),
   })
-  const runKey = ['run', runId]
+  const runKey = ['run', projectId, runId]
   const run = useQuery({
     queryKey: runKey,
-    queryFn: () => call<FlowRun>('workflow_run_get', { run_id: runId }),
+    queryFn: () => call<FlowRun>('workflow_run_get', { run_id: runId, project_id: projectId }),
     enabled: Boolean(runId),
     refetchInterval: ({ state }) => state.data?.status === 'running' && !state.error ? 900 : false,
   })
   const stepRecord = run.data?.nodes.find((step) => step.node_id === selectedNode)
   const node = useQuery({
-    queryKey: ['run-node', runId, selectedNode, stepRecord?.occurred_at],
-    queryFn: () => call<{ node: NodeExecution }>('workflow_run_get', { run_id: runId, node_id: selectedNode }),
+    queryKey: ['run-node', projectId, runId, selectedNode, stepRecord?.occurred_at],
+    queryFn: () => call<{ node: NodeExecution }>('workflow_run_get', {
+      run_id: runId, node_id: selectedNode, project_id: projectId,
+    }),
     enabled: Boolean(runId && selectedNode),
   })
   const start = useMutation({
-    mutationFn: () => call<FlowRun>('workflow_run', { workflow_id: item.id, options: { environment_id: environment || null } }),
+    mutationFn: () => call<FlowRun>('workflow_run', {
+      workflow_id: item.id, project_id: projectId, options: { environment_id: environment || null },
+    }),
     onSuccess: (result) => {
-      cache.setQueryData(['run', result.id], result)
+      cache.setQueryData(['run', projectId, result.id], result)
       setSelectedNode(undefined)
       onRun(result.id)
     },
   })
   const cancel = useMutation({
-    mutationFn: () => call<FlowRun>('workflow_run_cancel', { run_id: runId }),
+    mutationFn: () => call<FlowRun>('workflow_run_cancel', { run_id: runId, project_id: projectId }),
     onSuccess: () => cache.invalidateQueries({ queryKey: runKey }),
   })
   const active = run.data?.status === 'running'
@@ -258,7 +327,7 @@ root.render(<main className="connection"><h1>FlowTest Lite</h1><p role="status">
 
 void host.connect(undefined, { timeout: 15_000 }).then(() => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 4_000, retry: false } } })
-  root.render(<QueryClientProvider client={queryClient}><Workbench /></QueryClientProvider>)
+  root.render(<QueryClientProvider client={queryClient}><ProjectWorkbench /></QueryClientProvider>)
 }).catch(() => {
   root.render(<main className="connection"><h1>FlowTest Lite</h1>
     <p className="error" role="alert">未能连接 Codex。请关闭此页面后从左侧重新打开。</p>

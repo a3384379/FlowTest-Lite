@@ -64,6 +64,10 @@ class MoveApis(Model):
     group: str = Field(default="", max_length=100)
 
 
+class ProjectName(Model):
+    name: Annotated[str, StringConstraints(min_length=1, max_length=80, strip_whitespace=True)]
+
+
 class Environment(Model):
     name: str = Field(min_length=1, max_length=100)
     base_url: str = Field(default="", max_length=4096)

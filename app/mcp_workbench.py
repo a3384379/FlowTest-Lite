@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 WORKBENCH_NAME = "FlowTest-Lite"
-WORKBENCH_URI = "ui://flowtest-lite/workbench-0.2.0.html"
+WORKBENCH_URI = "ui://flowtest-lite/workbench-0.3.0.html"
 WORKBENCH_TOOL_META = {
     "ui": {"resourceUri": WORKBENCH_URI},
     "openai/ui": {"entrypoints": [{"type": "global"}]},

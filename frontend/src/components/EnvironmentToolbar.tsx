@@ -1,3 +1,4 @@
+import { useProjectApi } from '../lib/project-context'
 import { SettingOutlined } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import { Alert, App, Button, Drawer, Form, Input, Popconfirm, Select, Space, Spin } from 'antd'
@@ -5,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import EnvironmentMapEditor from '../features/api-console/EnvironmentMapEditor'
 import { mapValue, parseEnvironmentMap, type EnvironmentMapValue } from '../features/api-console/environment-map'
 import {
-  apiErrorMessage, client, createAsset, deleteAsset, listAssets, updateAsset,
+  apiErrorMessage,
   type CommonSettings, type Environment,
 } from '../lib/api'
 
@@ -14,6 +15,7 @@ export type EnvironmentSelection = { environment?: string; selectEnvironment: (i
 type Fields = { name?: string; base_url?: string; variables: EnvironmentMapValue; headers: EnvironmentMapValue }
 
 export default function EnvironmentToolbar({ environment, selectEnvironment }: EnvironmentSelection) {
+  const { listAssets } = useProjectApi()
   const [open, setOpen] = useState(false)
   const catalog = useQuery({ queryKey: ['environments'], queryFn: () => listAssets('environment') })
   const available = catalog.data
@@ -44,6 +46,7 @@ export default function EnvironmentToolbar({ environment, selectEnvironment }: E
 }
 
 function EnvironmentEditor({ environments, onSelect }: { environments: Environment[]; onSelect: (id?: string) => void }) {
+  const { client } = useProjectApi()
   const [key, setKey] = useState('common')
   const common = useQuery({
     queryKey: ['settings'],
@@ -84,6 +87,7 @@ function SettingsForm({ isCommon, values, current, onCreated, onDeleted }: {
   onCreated: (id: string) => void
   onDeleted: () => void
 }) {
+  const { client, createAsset, deleteAsset, updateAsset } = useProjectApi()
   const cache = useQueryClient()
   const { message } = App.useApp()
   const [saving, setSaving] = useState(false)

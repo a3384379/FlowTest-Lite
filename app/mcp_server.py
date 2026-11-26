@@ -20,7 +20,8 @@ from app.mcp_views import (
     run_node_view, workflow_overrides,
 )
 from app.mcp_workbench import WORKBENCH_NAME, WORKBENCH_TOOL_META, register_workbench_resource
-from app.models import ApiAsset, ImportOptions, Model, RunOptions, SendOptions, WorkflowAsset
+from app.models import ApiAsset, ImportOptions, Model, ProjectName, RunOptions, SendOptions, WorkflowAsset
+from app.projects import DEFAULT_PROJECT_ID, PROJECT_HEADER
 from app.service_launcher import (
     DEFAULT_PORT, SERVICE_API_VERSION, SERVICE_NAME, ServiceLaunchError, data_directory, data_store_id, ensure_service,
 )
@@ -31,6 +32,7 @@ Offset = Annotated[int, Field(ge=0)]
 Limit = Annotated[int, Field(ge=1, le=200)]
 ImportAssets = Annotated[list[ApiAsset], Field(min_length=1, max_length=1000)]
 ImportIndices = Annotated[list[Annotated[int, Field(ge=0)]], Field(min_length=1, max_length=1000)]
+ProjectId = Annotated[UUID | None, Field(description="project_list 返回的项目 ID。省略时使用默认项目。")]
 Payload = dict[str, Any]
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -65,6 +67,7 @@ class LiteClient:
 
     async def request(
         self, method: str, path: str, *, body: JsonValue = None, params: dict[str, str | int] | None = None,
+        project_id: UUID | None = None,
     ) -> Any:
         if self.auto_start:
             await self.ready()
@@ -74,9 +77,11 @@ class LiteClient:
                 timeout=httpx.Timeout(330, connect=3),
                 trust_env=False,
             ) as client:
-                if method != "GET" and not path.endswith("/preview"):
-                    await self.verify_write_target(client)
-                response = await client.request(method, path, json=body, params=params)
+                scoped = project_id is not None or path.split("/", 1)[0] == "projects"
+                if scoped or (method != "GET" and not path.endswith("/preview")):
+                    await self.verify_target(client, require_projects=scoped)
+                headers = {PROJECT_HEADER: str(project_id)} if project_id is not None else None
+                response = await client.request(method, path, json=body, params=params, headers=headers)
         except httpx.ConnectError as error:
             raise ToolError(f"无法连接 FlowTest-Lite。请先运行 uv run --locked python -m app --port {self.port}") from error
         except httpx.RequestError as error:
@@ -92,13 +97,13 @@ class LiteClient:
             raise ToolError(f"FlowTest-Lite HTTP {response.status_code}：{detail or '请求失败'}")
         return payload
 
-    async def for_update(self, path: str, revision: int) -> Payload:
-        current = await self.request("GET", path)
+    async def for_update(self, path: str, revision: int, project_id: UUID | None) -> Payload:
+        current = await self.request("GET", path, project_id=project_id)
         if current["revision"] != revision:
             raise ToolError("FlowTest-Lite HTTP 409：记录已有更新，请重新读取 revision 和内容")
         return {key: value for key, value in current.items() if key not in {"id", "revision", "updated_at"}}
 
-    async def verify_write_target(self, client: httpx.AsyncClient) -> None:
+    async def verify_target(self, client: httpx.AsyncClient, *, require_projects: bool) -> None:
         response = await client.get("health", timeout=3)
         try:
             health = response.json() if response.is_success else None
@@ -106,9 +111,11 @@ class LiteClient:
             health = None
         if (not isinstance(health, dict) or health.get("application") != SERVICE_NAME
                 or health.get("api_version") != SERVICE_API_VERSION):
-            raise ToolError("当前运行的 Lite 版本无法校验写入目标。请完成现有工作后重启 Lite，再修改或执行。")
+            raise ToolError("当前运行的 Lite 版本不支持此操作。请重启 Lite 加载新版。")
         if self.expected_store is not None and health.get("data_store") != self.expected_store:
             raise ToolError("当前 Lite 的数据目录与插件配置不同，请核对端口和数据目录。")
+        if require_projects and health.get("projects") is not True:
+            raise ToolError("当前运行的 Lite 尚不支持项目隔离。请重启 Lite 加载新版。")
 
 
 def asset_info(asset: Payload) -> Payload:
@@ -170,12 +177,14 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
     api = LiteClient(port, auto_start)
     preview_key = secrets.token_bytes(32)
 
-    def import_preview_id(candidates: list[Payload]) -> str:
-        content = json.dumps(candidates, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    def import_preview_id(candidates: list[Payload], project_id: UUID | None) -> str:
+        content = json.dumps([str(project_id or DEFAULT_PROJECT_ID), candidates], ensure_ascii=True,
+                             sort_keys=True, separators=(",", ":"))
         return hmac.digest(preview_key, content.encode("ascii"), "sha256").hex()
 
     server = FastMCP(SERVICE_NAME, log_level="WARNING", instructions=(
-        "管理本机 FlowTest-Lite 保存的接口和流程。查找资源后使用其 ID 操作，更新和删除需要最新 revision。"
+        "管理本机 FlowTest-Lite 保存的接口和流程。用 project_list 查项目，后续工具传同一个 project_id。"
+        "查找资源后使用其 ID 操作，更新和删除需要最新 revision。"
         + ("用户要求在 Codex 中打开工作台时调用 workbench_view。"
            if codex_app else "")
         + "用户要求在浏览器打开工作台时调用 workbench_open 并将 open_browser 设为 true。"
@@ -192,12 +201,20 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
 
     @server.tool(annotations=OPEN)
     async def workbench_open(page: Literal["apis", "flows"] = "apis", open_browser: bool = True,
-                             asset_id: UUID | None = None) -> Payload:
+                             asset_id: UUID | None = None, project_id: ProjectId = None) -> Payload:
         """启动或复用 Lite。可用 asset_id 直达接口或流程，open_browser=true 时打开默认浏览器。"""
         await api.ready()
         url = f"{api.origin}/{page}"
+        query = []
+        if project_id is not None:
+            projects = await api.request("GET", "projects")
+            if not any(item["id"] == str(project_id) for item in projects):
+                raise ToolError("项目不存在")
+            query.append(f"project={project_id}")
         if asset_id is not None:
-            url += f"?id={asset_id}"
+            query.append(f"id={asset_id}")
+        if query:
+            url += "?" + "&".join(query)
         opened = False
         if open_browser:
             try:
@@ -207,56 +224,71 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
         return {"url": url, "opened": opened}
 
     @server.tool(annotations=READ)
-    async def api_list(query: str = "", group: str | None = None, offset: Offset = 0, limit: Limit = 50) -> Payload:
+    async def project_list() -> Payload:
+        """列出本机项目，返回其他工具可用的 project_id。"""
+        return {"items": await api.request("GET", "projects"), "default_project_id": str(DEFAULT_PROJECT_ID)}
+
+    @server.tool(annotations=CREATE)
+    async def project_create(name: str) -> Payload:
+        """新建空项目，返回项目名称与 ID。"""
+        return await api.request("POST", "projects", body=ProjectName(name=name).model_dump())
+
+    @server.tool(annotations=WRITE)
+    async def project_rename(project_id: UUID, name: str) -> Payload:
+        """修改项目名称，保留项目 ID 及项目内的资产。"""
+        return await api.request("PUT", f"projects/{project_id}", body=ProjectName(name=name).model_dump())
+
+    @server.tool(annotations=READ)
+    async def api_list(query: str = "", group: str | None = None, offset: Offset = 0, limit: Limit = 50, project_id: ProjectId = None) -> Payload:
         """分页查找已保存的接口。按名称、路径或描述搜索，可按分组筛选。空字符串分组代表未分组。"""
         query = query.strip().casefold()
-        matches = [api_info(asset) for asset in await api.request("GET", "assets/api")
+        matches = [api_info(asset) for asset in await api.request("GET", "assets/api", project_id=project_id)
                    if (group is None or asset["group"] == group) and any(
                        query in value.casefold() for value in (asset["name"], asset["request"]["path"], asset["description"])
                    )]
         return page(matches, offset, limit)
 
     @server.tool(annotations=READ)
-    async def api_get(api_id: UUID, include_sensitive: bool = False) -> Payload:
+    async def api_get(api_id: UUID, include_sensitive: bool = False, project_id: ProjectId = None) -> Payload:
         """读取接口定义、提取规则和断言。默认隐藏专用鉴权配置和常见凭据字段，修改时只提交目标字段。"""
-        asset = await api.request("GET", f"assets/api/{api_id}")
+        asset = await api.request("GET", f"assets/api/{api_id}", project_id=project_id)
         return asset if include_sensitive else api_definition_view(asset)
 
     @server.tool(annotations=CREATE)
-    async def api_create(asset: ApiAsset) -> Payload:
+    async def api_create(asset: ApiAsset, project_id: ProjectId = None) -> Payload:
         """创建本地接口。asset.request.path 接受完整 HTTP(S) URL 或相对路径。"""
-        return api_info(await api.request("POST", "assets/api", body=asset.model_dump(mode="json")))
+        return api_info(await api.request("POST", "assets/api", body=asset.model_dump(mode="json"), project_id=project_id))
 
     @server.tool(annotations=WRITE)
-    async def api_update(api_id: UUID, revision: Revision, changes: dict[str, JsonValue]) -> Payload:
+    async def api_update(api_id: UUID, revision: Revision, changes: dict[str, JsonValue], project_id: ProjectId = None) -> Payload:
         """修改接口字段。changes 可传 name、group、description、base_url、request。request 按其字段合并，传入的对象或数组整体替换。"""
         if not changes or changes == {"request": {}}:
             raise ToolError("请提供需要修改的接口字段")
         path = f"assets/api/{api_id}"
-        current = await api.for_update(path, revision)
+        current = await api.for_update(path, revision, project_id)
         body = {**current, **changes}
         if isinstance(changes.get("request"), dict):
             body["request"] = {**current["request"], **changes["request"]}
-        return api_info(await api.request("PUT", path, body=body, params={"revision": revision}))
+        return api_info(await api.request("PUT", path, body=body, params={"revision": revision}, project_id=project_id))
 
     @server.tool(annotations=WRITE)
-    async def api_delete(api_id: UUID, revision: Revision) -> Payload:
+    async def api_delete(api_id: UUID, revision: Revision, project_id: ProjectId = None) -> Payload:
         """按最新版本删除一个本地接口。引用此接口的流程再次运行时会报找不到接口。"""
-        await api.request("DELETE", f"assets/api/{api_id}", params={"revision": revision})
+        await api.request("DELETE", f"assets/api/{api_id}", params={"revision": revision}, project_id=project_id)
         return {"id": str(api_id), "deleted": True}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True))
-    async def api_import_preview(source: ImportOptions, include_sensitive: bool = False) -> Payload:
+    async def api_import_preview(source: ImportOptions, include_sensitive: bool = False, project_id: ProjectId = None) -> Payload:
         """预览 cURL、OpenAPI、Postman、HAR 或 Bruno。返回候选及 preview_id。按原 source、preview_id 和从 0 起的 indices 保存原始定义。"""
-        candidates = await api.request("POST", "import/preview", body=source.model_dump(mode="json"))
-        preview_id = import_preview_id(candidates)
+        candidates = await api.request("POST", "import/preview", body=source.model_dump(mode="json"), project_id=project_id)
+        preview_id = import_preview_id(candidates, project_id)
         if not include_sensitive:
             candidates = [{**item, "asset": api_definition_view(item["asset"])} for item in candidates]
         return {"preview_id": preview_id, "candidates": candidates}
 
     @server.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False, openWorldHint=True))
     async def api_import_save(assets: ImportAssets | None = None, source: ImportOptions | None = None,
-                              preview_id: str | None = None, indices: ImportIndices | None = None) -> Payload:
+                              preview_id: str | None = None, indices: ImportIndices | None = None, project_id: ProjectId = None) -> Payload:
         """提供 source、preview_id 及 indices，保存选中接口的完整原值，文档变化需重新预览。也可只传完整 assets 批量新增。"""
         if assets is not None:
             if any(item is not None for item in (source, preview_id, indices)):
@@ -265,26 +297,26 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
         else:
             if source is None or not preview_id or indices is None:
                 raise ToolError("请选择导入来源 source、preview_id 和候选下标 indices")
-            candidates = await api.request("POST", "import/preview", body=source.model_dump(mode="json"))
-            if not hmac.compare_digest(preview_id.encode(), import_preview_id(candidates).encode()):
+            candidates = await api.request("POST", "import/preview", body=source.model_dump(mode="json"), project_id=project_id)
+            if not hmac.compare_digest(preview_id.encode(), import_preview_id(candidates, project_id).encode()):
                 raise ToolError("导入预览已过期或内容已变化，请重新预览后选择")
             if len(set(indices)) != len(indices) or max(indices) >= len(candidates):
                 raise ToolError("导入候选下标重复或超出预览范围")
             definitions = [candidates[index]["asset"] for index in indices]
-        saved = await api.request("POST", "import/save", body=definitions)
+        saved = await api.request("POST", "import/save", body=definitions, project_id=project_id)
         return {"items": [api_info(asset) for asset in saved]}
 
     @server.tool(annotations=READ)
-    async def api_preview(api_id: UUID, options: SendOptions | None = None, include_sensitive: bool = False) -> Payload:
+    async def api_preview(api_id: UUID, options: SendOptions | None = None, include_sensitive: bool = False, project_id: ProjectId = None) -> Payload:
         """查看待发 URL、请求头和请求体。默认隐藏常见凭据及接口配置的 API Key，无业务 HTTP 请求发出。"""
-        preview = await api.request("POST", f"requests/{api_id}/preview", body=(options or SendOptions()).model_dump(mode="json"))
+        preview = await api.request("POST", f"requests/{api_id}/preview", body=(options or SendOptions()).model_dump(mode="json"), project_id=project_id)
         return preview if include_sensitive else http_view(preview, preview.get("auth_key_name"))
 
     @server.tool(annotations=EXECUTE)
     async def api_send(api_id: UUID, options: SendOptions | None = None, include_sensitive: bool = False,
-                       detail: Literal["response", "summary", "full"] = "response") -> Payload:
+                       detail: Literal["response", "summary", "full"] = "response", project_id: ProjectId = None) -> Payload:
         """发送保存的接口，返回响应、提取和断言。full 另附实际请求，默认遮蔽常见鉴权值。summary 省略请求、响应体和响应头。"""
-        result = await api.request("POST", f"requests/{api_id}/send", body=(options or SendOptions()).model_dump(mode="json"))
+        result = await api.request("POST", f"requests/{api_id}/send", body=(options or SendOptions()).model_dump(mode="json"), project_id=project_id)
         custom = (result["request"] or {}).get("auth_key_name")
         if not include_sensitive:
             result["extracted"] = masked_fields(result["extracted"], custom)
@@ -302,22 +334,22 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
         return result
 
     @server.tool(annotations=READ)
-    async def environment_list() -> Payload:
+    async def environment_list(project_id: ProjectId = None) -> Payload:
         """列出可用于请求和流程执行的环境 ID 和名称。"""
-        return {"items": [asset_info(asset) for asset in await api.request("GET", "assets/environment")]}
+        return {"items": [asset_info(asset) for asset in await api.request("GET", "assets/environment", project_id=project_id)]}
 
     @server.tool(annotations=READ)
-    async def workflow_list(query: str = "", offset: Offset = 0, limit: Limit = 50) -> Payload:
+    async def workflow_list(query: str = "", offset: Offset = 0, limit: Limit = 50, project_id: ProjectId = None) -> Payload:
         """分页按名称查找流程，返回 ID、当前 revision 和节点数量。"""
         query = query.strip().casefold()
-        matches = [workflow_info(asset) for asset in await api.request("GET", "assets/workflow")
+        matches = [workflow_info(asset) for asset in await api.request("GET", "assets/workflow", project_id=project_id)
                    if query in asset["name"].casefold()]
         return page(matches, offset, limit)
 
     @server.tool(annotations=READ)
-    async def workflow_get(workflow_id: UUID, include_sensitive: bool = False) -> Payload:
+    async def workflow_get(workflow_id: UUID, include_sensitive: bool = False, project_id: ProjectId = None) -> Payload:
         """读取流程定义、输入和 revision，默认遮蔽常见凭据和 HTTP 覆盖中的鉴权值。完整替换定义或输入时请使用原值。"""
-        asset = await api.request("GET", f"assets/workflow/{workflow_id}")
+        asset = await api.request("GET", f"assets/workflow/{workflow_id}", project_id=project_id)
         if include_sensitive:
             return asset
         definition = asset["definition"]
@@ -325,7 +357,10 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
         definition["variables"] = masked_fields(definition["variables"])
         overrides = list(workflow_overrides(definition))
         if overrides:
-            keys = {item["id"]: api_auth_key(item) for item in await api.request("GET", "assets/api")}
+            keys = {
+                item["id"]: api_auth_key(item)
+                for item in await api.request("GET", "assets/api", project_id=project_id)
+            }
             for api_id, fields in overrides:
                 custom = keys.get(api_id)
                 if fields.get("headers"):
@@ -336,28 +371,28 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
 
     @server.tool(annotations=READ)
     async def workflow_validate(definition: WorkflowDefinition) -> Payload:
-        """检查流程结构、节点配置和映射，用于保存前校验。接口引用和环境在实际运行时检查。"""
+        """检查流程结构、节点配置和映射，用于保存前校验。接口引用在保存时检查，环境在实际运行时检查。"""
         validate_definition(definition)
         return {"valid": True, "node_count": len(definition.all_nodes())}
 
     @server.tool(annotations=CREATE)
     async def workflow_create(name: str, definition: WorkflowDefinition | None = None,
-                              inputs: dict[str, JsonValue] | None = None) -> Payload:
+                              inputs: dict[str, JsonValue] | None = None, project_id: ProjectId = None) -> Payload:
         """创建并保存流程。省略 definition 时创建从开始直达结束的空流程。"""
         asset = WorkflowAsset(name=name, definition=definition or starter_definition(), inputs=inputs or {})
-        return workflow_info(await api.request("POST", "assets/workflow", body=asset.model_dump(mode="json")))
+        return workflow_info(await api.request("POST", "assets/workflow", body=asset.model_dump(mode="json"), project_id=project_id))
 
     @server.tool(annotations=WRITE)
     async def workflow_update(workflow_id: UUID, revision: Revision, name: str | None = None,
                               inputs: dict[str, JsonValue] | None = None,
-                              definition: WorkflowDefinition | None = None, graph: GraphChanges | None = None) -> Payload:
+                              definition: WorkflowDefinition | None = None, graph: GraphChanges | None = None, project_id: ProjectId = None) -> Payload:
         """保存流程。可替换完整 definition，或用 graph 按 ID 成组增删改主画布节点和连线。内联区域及流程设置通过 definition 修改。"""
         if definition is not None and graph is not None:
             raise ToolError("definition 和 graph 只能指定一个")
         if all(value is None for value in (name, inputs, definition, graph)):
             raise ToolError("请提供需要修改的流程内容")
         path = f"assets/workflow/{workflow_id}"
-        current = await api.for_update(path, revision)
+        current = await api.for_update(path, revision, project_id)
         if name is not None:
             current["name"] = name
         if inputs is not None:
@@ -368,27 +403,27 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
             saved = current["definition"]
             saved["nodes"] = edit_items("节点", saved["nodes"], graph.upsert_nodes, graph.remove_node_ids)
             saved["edges"] = edit_items("连线", saved["edges"], graph.upsert_edges, graph.remove_edge_ids)
-        return workflow_info(await api.request("PUT", path, body=current, params={"revision": revision}))
+        return workflow_info(await api.request("PUT", path, body=current, params={"revision": revision}, project_id=project_id))
 
     @server.tool(annotations=WRITE)
-    async def workflow_delete(workflow_id: UUID, revision: Revision) -> Payload:
+    async def workflow_delete(workflow_id: UUID, revision: Revision, project_id: ProjectId = None) -> Payload:
         """按最新版本删除一个本地流程。"""
-        await api.request("DELETE", f"assets/workflow/{workflow_id}", params={"revision": revision})
+        await api.request("DELETE", f"assets/workflow/{workflow_id}", params={"revision": revision}, project_id=project_id)
         return {"id": str(workflow_id), "deleted": True}
 
     @server.tool(annotations=EXECUTE)
-    async def workflow_run(workflow_id: UUID, options: RunOptions | None = None) -> Payload:
+    async def workflow_run(workflow_id: UUID, options: RunOptions | None = None, project_id: ProjectId = None) -> Payload:
         """运行当前保存的流程，返回 run ID。传 options 可选择环境或临时流程输入。"""
-        return await api.request("POST", f"workflows/{workflow_id}/run", body=(options or RunOptions()).model_dump(mode="json"))
+        return await api.request("POST", f"workflows/{workflow_id}/run", body=(options or RunOptions()).model_dump(mode="json"), project_id=project_id)
 
     @server.tool(annotations=READ)
     async def workflow_run_get(run_id: UUID, node_id: str | None = None, include_details: bool = False,
-                               include_sensitive: bool = False) -> Payload:
+                               include_sensitive: bool = False, project_id: ProjectId = None) -> Payload:
         """查询运行状态。传 node_id 可读取该步的请求、响应、输出和断言。全部详情和常见鉴权值均需显式开启。"""
         params = {"view": "full" if node_id is not None or include_details else "summary"}
         if node_id is not None:
             params["node_id"] = node_id
-        run = await api.request("GET", f"runs/{run_id}", params=params)
+        run = await api.request("GET", f"runs/{run_id}", params=params, project_id=project_id)
         if node_id is not None:
             node = next((item for item in run["nodes"] if item["node_id"] == node_id), None)
             if node is None:
@@ -400,9 +435,9 @@ def create_server(port: int, *, auto_start: bool = False, codex_app: bool = Fals
         return run if include_sensitive else {**run, "nodes": [run_node_view(item) for item in run["nodes"]]}
 
     @server.tool(annotations=WRITE)
-    async def workflow_run_cancel(run_id: UUID) -> Payload:
+    async def workflow_run_cancel(run_id: UUID, project_id: ProjectId = None) -> Payload:
         """请求取消当前运行，随后用 workflow_run_get 查询最终状态。"""
-        return run_summary(await api.request("POST", f"runs/{run_id}/cancel", params={"view": "summary"}))
+        return run_summary(await api.request("POST", f"runs/{run_id}/cancel", params={"view": "summary"}, project_id=project_id))
 
     return server
 

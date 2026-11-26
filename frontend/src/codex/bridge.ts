@@ -1,7 +1,7 @@
 import { App } from '@modelcontextprotocol/ext-apps'
 
 export const host = new App(
-  { name: 'FlowTest-Lite', version: '0.2.0' },
+  { name: 'FlowTest-Lite', version: '0.3.0' },
   { availableDisplayModes: ['fullscreen'] },
   { autoResize: false, strict: true },
 )

@@ -8,7 +8,16 @@ export type {
 
 export const httpMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE'] as const
 export type HttpMethod = (typeof httpMethods)[number]
-export const client = axios.create({ baseURL: '/api', timeout: 0 })
+const client = axios.create({ baseURL: '/api', timeout: 0 })
+export type Project = { id: string; name: string }
+export const defaultProjectId = '00000000-0000-0000-0000-000000000000'
+
+export const projectCatalog = {
+  list: () => client.get<Project[]>('/projects').then((res) => res.data),
+  save: (name: string, id?: string) => (id
+    ? client.put<Project>(`/projects/${id}`, { name })
+    : client.post<Project>('/projects', { name })).then((res) => res.data),
+}
 
 export function apiErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
@@ -143,20 +152,25 @@ type AssetContracts = {
 }
 type Kind = keyof AssetContracts
 
-export function listAssets<K extends Kind>(kind: K): Promise<Array<AssetContracts[K][1]>> {
-  return client.get(`/assets/${kind}`).then((res) => res.data)
-}
-export function getAsset<K extends Kind>(kind: K, id: string): Promise<AssetContracts[K][1]> {
-  return client.get(`/assets/${kind}/${id}`).then((res) => res.data)
-}
-export function createAsset<K extends Kind>(kind: K, asset: AssetContracts[K][0]): Promise<AssetContracts[K][1]> {
-  return client.post(`/assets/${kind}`, asset).then((res) => res.data)
-}
-export function updateAsset<K extends Kind>(
-  kind: K, id: string, revision: number, asset: AssetContracts[K][0],
-): Promise<AssetContracts[K][1]> {
-  return client.put(`/assets/${kind}/${id}`, asset, { params: { revision } }).then((res) => res.data)
-}
-export async function deleteAsset(kind: Kind, id: string): Promise<void> {
-  await client.delete(`/assets/${kind}/${id}`)
+export function projectApi(id: string) {
+  const client = axios.create({ baseURL: '/api', timeout: 0, headers: { 'X-FlowTest-Project': id } })
+  return {
+    projectId: id,
+    client,
+    listAssets<K extends Kind>(kind: K): Promise<Array<AssetContracts[K][1]>> {
+      return client.get(`/assets/${kind}`).then((res) => res.data)
+    },
+    getAsset<K extends Kind>(kind: K, assetId: string): Promise<AssetContracts[K][1]> {
+      return client.get(`/assets/${kind}/${assetId}`).then((res) => res.data)
+    },
+    createAsset<K extends Kind>(kind: K, asset: AssetContracts[K][0]): Promise<AssetContracts[K][1]> {
+      return client.post(`/assets/${kind}`, asset).then((res) => res.data)
+    },
+    updateAsset<K extends Kind>(kind: K, assetId: string, revision: number, asset: AssetContracts[K][0]): Promise<AssetContracts[K][1]> {
+      return client.put(`/assets/${kind}/${assetId}`, asset, { params: { revision } }).then((res) => res.data)
+    },
+    async deleteAsset(kind: Kind, assetId: string): Promise<void> {
+      await client.delete(`/assets/${kind}/${assetId}`)
+    },
+  }
 }
